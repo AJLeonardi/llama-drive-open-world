@@ -6,7 +6,7 @@ import type { WorldQueries } from '../vehicles/VehicleSim';
 import { StaticBatch, Tile } from './batch';
 import { BOOST_PADS, LOOP, surfaceAt } from './layout';
 import { addTerrainCollider, addTerrainMeshes, sampleTerrain, Terrain, waterMeshes } from './terrain';
-import { addBoostPads, addBridges, addRoads, addSidewalks, roadMaterialKey } from './roads';
+import { addBoostPads, addBridges, addIntersections, addRoads, addSidewalks, roadMaterialKey } from './roads';
 import { buildBoston } from './boston';
 import { buildNYC } from './nyc';
 import { buildHighway } from './highway';
@@ -15,9 +15,10 @@ import { buildDemoPark } from './demoPark';
 import { buildMountain } from './mountain';
 import { buildCityStunts } from './cityStunts';
 import { OuterWorld } from './OuterWorld';
+import { groundMaterial } from './groundMaterial';
 import type { PropSpawn } from './propModels';
 import type { ParkedSpawn } from './streetLife';
-import { boostTexture, dirtRoadTexture, groundTexture, roadTexture, sidewalkTexture, storefrontTexture, windowTexture, WindowStyle } from '../util/textures';
+import { boostTexture, dirtRoadTexture, plainAsphaltTexture, groundTexture, roadTexture, sidewalkTexture, storefrontTexture, windowTexture, WindowStyle } from '../util/textures';
 import type { RoadKind } from './layout';
 import { pointInRect } from '../util/math';
 
@@ -31,11 +32,12 @@ function materials(): Record<string, THREE.Material> {
     highway: roadTexture(6, true),
     avenue: roadTexture(4),
     street: roadTexture(2),
-    ramp: roadTexture(2),
+    ramp: roadTexture(1), // like a real exit ramp: white edge lines, no centre line
     dirt: dirtRoadTexture(),
   };
   const out: Record<string, THREE.Material> = {
     ground: new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true }),
+    'ground-outer': groundMaterial(groundTexture()),
     plain: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.05 }),
     loop: new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.4, metalness: 0.3 }),
     glow: new THREE.MeshBasicMaterial({ vertexColors: true }),
@@ -44,6 +46,9 @@ function materials(): Record<string, THREE.Material> {
     boost: new THREE.MeshBasicMaterial({ map: boostTexture(), polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, depthWrite: false }),
   };
   for (const k of Object.keys(lanes) as RoadKind[]) out[roadMaterialKey(k)] = road(lanes[k]);
+  // Junctions: plain asphalt patches and white markings, drawn over the roads.
+  out['road-plain'] = road(plainAsphaltTexture());
+  out['road-marks'] = new THREE.MeshLambertMaterial({ color: 0xeeeeee, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 });
   // Buildings and objects cast shadows; ground, roads and sidewalks only receive them.
   for (const k of ['plain', 'loop', 'store']) out[k].userData.castShadow = true;
   for (const s of ['brick', 'brownstone', 'glass', 'concrete', 'stone', 'pru'] as WindowStyle[])
@@ -79,6 +84,7 @@ export class World {
     addTerrainCollider(physics, this.terrain);
     addTerrainMeshes(batch, this.terrain);
     addRoads(batch);
+    addIntersections(batch);
     const railProps = addBridges(batch, physics);
     addSidewalks(batch, physics);
     addBoostPads(batch);

@@ -11,6 +11,7 @@
 import { clamp, lerp, mulberry32, smoothstep, type Vec2 } from '../util/math';
 import { FAMILY_NORMALS, HEX, OUTER, RING_APOTHEM, WORLD, hexDistance } from './bounds';
 import { terrainBase } from './hills';
+import { desertWeight } from './biomes';
 
 /** Highway half-width (6 lanes + shoulders, like the one between the cities). */
 export const HW = 15;
@@ -351,27 +352,55 @@ function rampCandidates(): CurveRoad[] {
   const out: CurveRoad[] = [];
   for (const c of CROSSINGS) {
     const U = HIGHWAYS[c.upper], L = HIGHWAYS[c.lower];
-    const dU = c.flat + HUMP_RAMP + 30;
+    // Leave the upper highway well before its climb to the bridge.
+    const dU = c.flat + HUMP_RAMP + 90;
     for (const sa of [-1, 1])
       for (const sb of [-1, 1]) {
         // Which side of each highway this corner is on.
         const sideU = Math.sign((-U.uz * L.ux + U.ux * L.uz) * sb);
         const sideL = Math.sign((-L.uz * U.ux + L.ux * U.uz) * sa);
         const p1: Vec2 = [c.x + U.ux * sa * dU - U.uz * sideU * (HW - 3), c.z + U.uz * sa * dU + U.ux * sideU * (HW - 3)];
-        const p2: Vec2 = [c.x + L.ux * sb * RAMP_LOWER - L.uz * sideL * (HW - 3), c.z + L.uz * sb * RAMP_LOWER + L.ux * sideL * (HW - 3)];
-        const k: Vec2 = [c.x + U.ux * sa * dU * 0.45 + L.ux * sb * RAMP_LOWER * 0.95, c.z + U.uz * sa * dU * 0.45 + L.uz * sb * RAMP_LOWER * 0.95];
-        const h1 = profileAt(U, c.sUpper + sa * dU), h2 = profileAt(L, c.sLower + sb * RAMP_LOWER);
+        // How far the ramp has to turn: sharp corners (two highways at 60°) need a 120°
+        // turn, so they start and end further out to leave room for a gentle curve.
+        const turn = Math.acos(Math.max(-1, Math.min(1, -(U.ux * sa * L.ux * sb + U.uz * sa * L.uz * sb))));
+        const dL = turn > Math.PI / 2 ? RAMP_LOWER * 1.9 : RAMP_LOWER;
+        const p2: Vec2 = [c.x + L.ux * sb * dL - L.uz * sideL * (HW - 3), c.z + L.uz * sb * dL + L.ux * sideL * (HW - 3)];
+        // A smooth S: it leaves running alongside the upper highway (heading towards the
+        // crossing) and arrives running alongside the lower one (heading away from it),
+        // like a real exit and entrance, rather than turning off at an angle.
+        // Curve handles: long enough for a gentle turn, never reaching back towards the bridge.
+        const chord = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) * (turn > Math.PI / 2 ? 0.6 : 0.42);
+        const h1 = Math.min(chord, dU * 0.5), h2 = Math.min(chord, dL * 0.5);
+        const k1: Vec2 = [p1[0] - U.ux * sa * h1, p1[1] - U.uz * sa * h1];
+        const k2: Vec2 = [p2[0] - L.ux * sb * h2, p2[1] - L.uz * sb * h2];
         const pts: Vec2[] = [], hs: number[] = [];
-        const N = 28;
+        const N = 36;
         for (let i = 0; i <= N; i++) {
-          const t = i / N, a = (1 - t) * (1 - t), b = 2 * t * (1 - t), d = t * t;
-          pts.push([a * p1[0] + b * k[0] + d * p2[0], a * p1[1] + b * k[1] + d * p2[1]]);
-          hs.push(lerp(h1, h2, smoothstep(0, 1, t)));
+          const t = i / N, mt = 1 - t;
+          const a = mt * mt * mt, b = 3 * mt * mt * t, cc = 3 * mt * t * t, d = t * t * t;
+          pts.push([a * p1[0] + b * k1[0] + cc * k2[0] + d * p2[0], a * p1[1] + b * k1[1] + cc * k2[1] + d * p2[1]]);
+          // Follow each highway's own height while alongside it (the upper one may already be
+          // climbing to its bridge), easing from one to the other in between.
+          const [x, z] = pts[pts.length - 1];
+          const onU = profileAt(U, highwayCoords(U, x, z).s), onL = profileAt(L, highwayCoords(L, x, z).s);
+          hs.push(lerp(onU, onL, smoothstep(0.15, 0.85, t)));
         }
         out.push({ kind: 'ramp', pts, hs, hw: RAMP_HW, closed: false, from: U.id, to: L.id, ...bbox(pts) });
       }
   }
   return out;
+}
+
+/** The tightest turn along a polyline (radius, m). */
+function tightestRadius(pts: Vec2[]) {
+  let min = Infinity;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    let dh = Math.abs(Math.atan2(c[0] - b[0], c[1] - b[1]) - Math.atan2(b[0] - a[0], b[1] - a[1]));
+    if (dh > Math.PI) dh = 2 * Math.PI - dh;
+    min = Math.min(min, Math.hypot(c[0] - b[0], c[1] - b[1]) / Math.max(1e-6, dh));
+  }
+  return min;
 }
 
 /** Ramps that would run into another highway, the Ring or another ramp are left out. */
@@ -387,6 +416,11 @@ function makeRamps(): CurveRoad[] {
       }),
     );
     const hitsRing = mid.some(([x, z]) => hexDistance(x, z) > RING_APOTHEM - RING_CORNER * 0.2 - 40);
+    // Gentle enough to drive at speed, and clear of the bridge (pillars, abutments).
+    const cr = CROSSINGS.find((k) => k.upper === r.from && k.lower === r.to)!;
+    const tooClose = r.pts.some(([x, z]) => Math.hypot(x - cr.x, z - cr.z) < (HW + 11) / cr.sin + 40);
+    const tooTight = tightestRadius(r.pts) < 45;
+    if (tooClose || tooTight) continue;
     const hitsRamp = kept.some((o) => o.x0 < r.x1 + 20 && o.x1 > r.x0 - 20 && o.z0 < r.z1 + 20 && o.z1 > r.z0 - 20 &&
       r.pts.some(([x, z]) => o.pts.some(([ox, oz]) => Math.hypot(ox - x, oz - z) < RAMP_HW * 2 + 6)));
     if (!hitsHighway && !hitsRing && !hitsRamp) kept.push(r);
@@ -538,7 +572,7 @@ export function shapeOuter(x: number, z: number, h: number) {
   for (const c of CROSSINGS) {
     const dx = x - c.x, dz = z - c.z;
     if (Math.abs(dx) > 700 || Math.abs(dz) > 700) continue;
-    h = lerp(h, c.h0, 1 - smoothstep(260, 520, Math.hypot(dx, dz)));
+    h = lerp(h, c.h0, 1 - smoothstep(200, 400, Math.hypot(dx, dz)));
   }
   // Lakes: a basin below the water, a dry bank round it.
   for (const l of OUTER_LAKES) {
@@ -550,12 +584,15 @@ export function shapeOuter(x: number, z: number, h: number) {
     else h = lerp(l.level + 1.2 * smoothstep(l.r, l.r + 12, d), h, smoothstep(l.r + 8, l.r + 110, d));
   }
   // Roads: each pulls the ground towards its own height, the strongest pull winning.
+  // In the desert the cuttings are steep rock walls (canyons), elsewhere gentle slopes.
+  const steep = desertWeight(x, z);
+  const reach = HW + 45 - 30 * steep;
   const pulls: [number, number][] = [];
   for (const hw of HIGHWAYS) {
     const { s, d } = highwayCoords(hw, x, z);
     const ad = Math.abs(d);
-    if (ad > HW + 46 || s < -60 || s > hw.len + 60) continue;
-    let w = 1 - smoothstep(HW + 3, HW + 45, ad);
+    if (ad > reach + 1 || s < -60 || s > hw.len + 60) continue;
+    let w = 1 - smoothstep(HW + 3, reach, ad);
     if (s < 0 || s > hw.len) w *= 1 - smoothstep(0, 60, s < 0 ? -s : s - hw.len);
     // Under a bridge the lower highway's ground wins (the deck spans the gap).
     for (const c of CROSSINGS) {

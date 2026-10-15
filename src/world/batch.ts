@@ -3,6 +3,10 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 
 export const TILE = 400;
 
+export const ROAD_ORDER: Record<string, number> = {
+  'road-dirt': 1, 'road-ramp': 1.1, 'road-street': 1.2, 'road-avenue': 1.3, 'road-highway': 1.4, 'road-plain': 2, 'road-marks': 3,
+};
+
 /**
  * Collects static world geometry (already in world space) and merges it into one
  * mesh per (tile, material). Tiles far from the camera are hidden entirely, which
@@ -35,7 +39,9 @@ export class StaticBatch {
         merged.computeBoundingSphere();
         const mesh = new THREE.Mesh(merged, materials[matKey]);
         mesh.matrixAutoUpdate = false;
-        if (matKey.startsWith('road')) mesh.renderOrder = 1;
+        // Roads draw after the ground, bigger roads over smaller ones (so at merges the
+        // highway's lines carry on), then junction patches, then their markings.
+        if (matKey.startsWith('road')) mesh.renderOrder = ROAD_ORDER[matKey] ?? 1;
         group.add(mesh);
       }
       group.matrixAutoUpdate = false;

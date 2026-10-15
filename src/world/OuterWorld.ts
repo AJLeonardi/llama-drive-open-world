@@ -8,11 +8,14 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Physics, RAPIER } from '../physics/Physics';
 import { CHUNK, OUTER, TERRAIN_CELL, WORLD } from './bounds';
 import {
-  CROSSINGS, CURVES, CurveRoad, HIGHWAYS, HW, Highway, OUTER_LAKES, RAMPS, Solid, TOWERS, bridgeSolids, highwayCoords, profileAt,
+  CROSSINGS, CURVES, CurveRoad, HIGHWAYS, HW, Highway, OUTER_LAKES, RAMPS, Solid, TOWERS, bridgeSolids, highwayCoords, outerLakeAt, outerRoadAt, profileAt,
 } from './outer';
 import { heightAt } from './layout';
+import { desertWeight } from './biomes';
+import { bushGeometry, bushMaterial } from './bushes';
+import { mulberry32, smoothstep } from '../util/math';
 import { heightfieldCollider, terrainPatch } from './terrain';
-import { normalizeAttributes } from './batch';
+import { ROAD_ORDER, normalizeAttributes } from './batch';
 import { box } from '../vehicles/builders/geo';
 import { textPanel } from './landmarks';
 
@@ -54,14 +57,14 @@ export function addSolid(physics: Physics, b: Solid) {
   return col;
 }
 
-/** A road surface strip along points (x, y, z), `hw` either side, with lengthwise UVs. */
-function ribbon(pts: { x: number; y: number; z: number }[], hw: number, v0: number) {
+/** A road surface strip along points (x, y, z), `hw` (or per point `w`) either side, with lengthwise UVs. */
+function ribbon(pts: { x: number; y: number; z: number; w?: number }[], hw: number, v0: number) {
   const pos: number[] = [], uv: number[] = [], nrm: number[] = [], idx: number[] = [];
   let v = v0;
   pts.forEach((p, i) => {
     const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
     const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz) || 1;
-    const px = (-dz / len) * hw, pz = (dx / len) * hw;
+    const px = (-dz / len) * (p.w ?? hw), pz = (dx / len) * (p.w ?? hw);
     if (i > 0) v += Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z) / V_REPEAT;
     pos.push(p.x + px, p.y, p.z + pz, p.x - px, p.y, p.z - pz);
     uv.push(0, v, 1, v);
@@ -218,8 +221,14 @@ export class OuterWorld {
         if (r % 4 === 3) yield;
       }
       // (Chunks line up with WORLD's edges, so each one is wholly inside or outside it.)
-      const ground = terrainPatch(x0, z0, N, N, (k, r) => h[(r + 1) * S + (k + 1)]);
-      this.add(c, 'ground', ground);
+      // The ground keeps its own mesh (its desert attribute doesn't survive merging).
+      const ground = terrainPatch(x0, z0, N, N, (k, r) => h[(r + 1) * S + (k + 1)], true);
+      ground.computeBoundingSphere();
+      const gm = new THREE.Mesh(ground, this.materials['ground-outer']);
+      gm.matrixAutoUpdate = false;
+      gm.receiveShadow = true;
+      c.group.add(gm);
+      this.bushes(c, h, S);
       c.heights = new Float32Array((N + 1) * (N + 1));
       for (let r = 0; r <= N; r++) for (let k = 0; k <= N; k++) c.heights[r * (N + 1) + k] = h[(r + 1) * S + (k + 1)];
       const heights = c.heights;
@@ -255,10 +264,62 @@ export class OuterWorld {
       mesh.matrixAutoUpdate = false;
       mesh.receiveShadow = true;
       mesh.castShadow = key === 'plain';
-      if (key.startsWith('road')) mesh.renderOrder = 1;
+      if (key.startsWith('road')) mesh.renderOrder = ROAD_ORDER[key] ?? 1;
       c.group.add(mesh);
     }
     c.geos.clear();
+  }
+
+  /**
+   * Desert scrub: thick along the highway verges, scattered across the open desert,
+   * never on a road, a rock face or in water. (No physics: you can drive through.)
+   */
+  private bushes(c: Chunk, h: Float32Array, S: number) {
+    const rng = mulberry32(c.ix * 7919 + c.iz * 104729 + 3);
+    const ground = (x: number, z: number) => {
+      const fx = (x - c.x0) / TERRAIN_CELL + 1, fz = (z - c.z0) / TERRAIN_CELL + 1;
+      const k = Math.min(S - 2, Math.max(0, Math.floor(fx))), r = Math.min(S - 2, Math.max(0, Math.floor(fz)));
+      const u = fx - k, v = fz - r;
+      const at = (rr: number, kk: number) => h[rr * S + kk];
+      const y = (at(r, k) * (1 - u) + at(r, k + 1) * u) * (1 - v) + (at(r + 1, k) * (1 - u) + at(r + 1, k + 1) * u) * v;
+      const slope = Math.hypot(at(r, k + 1) - at(r, k), at(r + 1, k) - at(r, k)) / TERRAIN_CELL;
+      return { y, slope };
+    };
+    const inChunk = (x: number, z: number) => x >= c.x0 && x < c.x0 + CHUNK && z >= c.z0 && z < c.z0 + CHUNK;
+    const clear = (x: number, z: number) =>
+      !outerRoadAt(x, z) && !outerRoadAt(x + 3, z) && !outerRoadAt(x - 3, z) && !outerRoadAt(x, z + 3) && !outerRoadAt(x, z - 3) && !outerLakeAt(x, z);
+    const spots: [number, number][] = [];
+    // Verges of the highways crossing this chunk.
+    for (const hw of HIGHWAYS) {
+      const q0 = highwayCoords(hw, c.x0 + CHUNK / 2, c.z0 + CHUNK / 2);
+      if (Math.abs(q0.d) > CHUNK) continue;
+      for (let s = q0.s - CHUNK; s < q0.s + CHUNK; s += 6) {
+        if (s < 0 || s > hw.len) continue;
+        for (const side of [-1, 1]) {
+          if (rng() > 0.5) continue;
+          const d = side * (HW + 4 + rng() * rng() * 40);
+          spots.push([hw.ax + hw.ux * s - hw.uz * d, hw.az + hw.uz * s + hw.ux * d]);
+        }
+      }
+    }
+    // And dotted about everywhere else.
+    for (let i = 0; i < 90; i++) spots.push([c.x0 + rng() * CHUNK, c.z0 + rng() * CHUNK]);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    const mats: THREE.Matrix4[] = [];
+    for (const [x, z] of spots) {
+      if (!inChunk(x, z) || desertWeight(x, z) < 0.35 + rng() * 0.3 || !clear(x, z)) continue;
+      const g = ground(x, z);
+      if (g.slope > 0.35) continue;
+      const size = 1.1 + rng() * rng() * 2.4; // mostly small-to-medium, some big ones
+      q.setFromAxisAngle(up, rng() * Math.PI);
+      mats.push(m4.compose(new THREE.Vector3(x, g.y - 0.12, z), q, new THREE.Vector3(size, size * (0.8 + rng() * 0.5), size)).clone());
+    }
+    if (!mats.length) return;
+    const mesh = new THREE.InstancedMesh(bushGeometry(), bushMaterial(), mats.length);
+    mats.forEach((m, i) => mesh.setMatrixAt(i, m));
+    mesh.computeBoundingSphere();
+    mesh.receiveShadow = true;
+    c.group.add(mesh);
   }
 
   /** The part of a straight highway inside this chunk. */
@@ -289,7 +350,9 @@ export class OuterWorld {
     if (r.x1 < c.x0 - 50 || r.x0 > c.x0 + CHUNK + 50 || r.z1 < c.z0 - 50 || r.z0 > c.z0 + CHUNK + 50) return;
     const n = r.pts.length, segs = r.closed ? n : n - 1;
     const lift = ROAD_LIFT + (r.kind === 'ramp' ? 0.04 : 0.02);
-    let run: { x: number; y: number; z: number }[] = [];
+    let run: { x: number; y: number; z: number; w?: number }[] = [];
+    // Ramps taper in and out of the highways like real exit/entry lanes (no square ends).
+    const taper = (i: number) => (r.kind === 'ramp' ? r.hw * (0.25 + 0.75 * smoothstep(0, 5, Math.min(i, n - 1 - i))) : r.hw);
     const flush = () => {
       if (run.length > 1) this.add(c, r.kind === 'ramp' ? 'road-ramp' : 'road-highway', ribbon(run, r.hw, 0));
       run = [];
@@ -297,8 +360,8 @@ export class OuterWorld {
     for (let i = 0; i < segs; i++) {
       const [a, b] = [r.pts[i], r.pts[(i + 1) % n]];
       if (a[0] >= c.x0 && a[0] < c.x0 + CHUNK && a[1] >= c.z0 && a[1] < c.z0 + CHUNK) {
-        if (!run.length) run.push({ x: a[0], y: r.hs[i] + lift, z: a[1] });
-        run.push({ x: b[0], y: r.hs[(i + 1) % n] + lift, z: b[1] });
+        if (!run.length) run.push({ x: a[0], y: r.hs[i] + lift, z: a[1], w: taper(i) });
+        run.push({ x: b[0], y: r.hs[(i + 1) % n] + lift, z: b[1], w: taper((i + 1) % n) });
       } else flush();
     }
     flush();
@@ -388,7 +451,7 @@ export class OuterWorld {
     this.physicsOff(c);
     c.group.traverse((o) => {
       if (o instanceof THREE.Mesh) {
-        if (o.geometry !== this.signGeo) o.geometry.dispose();
+        if (o.geometry !== this.signGeo && o.geometry !== bushGeometry()) o.geometry.dispose();
         if (o.material instanceof THREE.MeshBasicMaterial && o.material !== this.glow && o.material.map) o.material.dispose();
       }
     });

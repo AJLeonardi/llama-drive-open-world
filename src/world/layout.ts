@@ -8,6 +8,7 @@ import { AABB2, Vec2, distOutsideAABB, distToSegment, inAABB, lerp, smoothstep, 
 import type { Surface } from '../physics/surfaces';
 import { WORLD } from './bounds';
 import { terrainBase } from './hills';
+import { desertWeight } from './biomes';
 import { outerLakeAt, outerRoadAt, shapeOuter } from './outer';
 
 export { WORLD, OUTER, TERRAIN_CELL, CHUNK } from './bounds';
@@ -400,6 +401,7 @@ export function surfaceAt(x: number, z: number): Surface {
   if (depth > 1.2) return 'water';
   if (depth > 0.05) return 'sand';
   if (inAABB(x, z, DEMO_PARK)) return 'dirt';
+  if (desertWeight(x, z) > 0.5) return 'dirt'; // desert sand (firm enough to drive and drift on)
   for (const p of PARKS) if (inAABB(x, z, p)) return 'grass';
   if (inAABB(x, z, BOSTON) || inAABB(x, z, NYC)) return 'concrete';
   return 'grass';

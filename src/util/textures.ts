@@ -135,6 +135,15 @@ export const roadTexture = (lanes: number, highway = false) =>
     }
   });
 
+/** Plain asphalt for junction patches: same grain as the roads, no wear lines or markings. */
+export const plainAsphaltTexture = () =>
+  canvasTex('asphalt-plain', 512, (g, s) => {
+    // A shade lighter than the roads' base: they look lighter overall thanks to their lines.
+    g.fillStyle = '#525459';
+    g.fillRect(0, 0, s, s);
+    speckle(g, s, 5, ['#4c4e53', '#5b5d62', '#46484c', '#64666b'], 9000, [1, 3]);
+  });
+
 export const dirtRoadTexture = () =>
   canvasTex('dirt-road', 256, (g, s) => {
     g.fillStyle = '#8f6a45';

@@ -107,6 +107,10 @@ describe('driving highway country', () => {
           }
           prev = v;
         }
+        if (target !== pts.length && process.env.TRACE) {
+          const p = car.body.translation();
+          console.log(`stuck: target ${target}/${pts.length} backwards=${backwards} car ${p.x.toFixed(0)},${p.y.toFixed(1)},${p.z.toFixed(0)} v=${car.speed.toFixed(1)} wheels=${car.wheelsInContact} next ${pts[target].map(Math.round)} h=${hs[target].toFixed(1)} up=${car.up().y.toFixed(2)} steps=${steps}`);
+        }
         expect(target, 'reached the end of the ramp').toBe(pts.length);
         expect(airborne / steps).toBeLessThan(0.03);
         expect(maxJolt).toBeLessThan(2.5);

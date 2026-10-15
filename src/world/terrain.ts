@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Physics, RAPIER } from '../physics/Physics';
 import { HARBOR, LAKE, TERRAIN_CELL, WATER_LEVEL, WORLD, HARBOR_X, RIVER, heightAt, surfaceAt } from './layout';
+import { desertWeight } from './biomes';
 import { StaticBatch, TILE } from './batch';
 import { valueNoise } from '../util/math';
 import type { Surface } from '../physics/surfaces';
@@ -51,8 +52,8 @@ const ROCK = [0.46, 0.41, 0.36];
  * vertex colours (steep slopes show bare rock). `h(c, r)` gives the height at a grid
  * point and may be asked for points one cell outside the patch (for slopes).
  */
-export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: (c: number, r: number) => number) {
-  const pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [];
+export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: (c: number, r: number) => number, withBiomes = false) {
+  const pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [], desert: number[] = [];
   for (let r = 0; r <= nr; r++)
     for (let c = 0; c <= nc; c++) {
       const x = x0 + c * TERRAIN_CELL, z = z0 + r * TERRAIN_CELL;
@@ -70,6 +71,11 @@ export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: 
       const rock = s === 'grass' || s === 'dirt' ? Math.min(1, Math.max(0, (slope - 0.45) * 2.5)) : 0;
       const rn = 0.8 + 0.3 * valueNoise(x / 9, y / 6);
       for (let k = 0; k < 3; k++) col.push((base[k] * n + (k < 2 ? lift : lift * 0.5)) * (1 - rock) + ROCK[k] * rn * rock);
+      // Desert (photo-textured by groundMaterial): how much, and how rocky (cliffs, steep slopes).
+      if (withBiomes) {
+        const dw = surfaceAt(x, z) === 'asphalt' ? 0 : desertWeight(x, z);
+        desert.push(dw, Math.min(1, Math.max(0, (slope - 0.32) * 3.5)));
+      }
     }
   for (let r = 0; r < nr; r++)
     for (let c = 0; c < nc; c++) {
@@ -80,6 +86,7 @@ export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: 
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  if (withBiomes) g.setAttribute('aDesert', new THREE.Float32BufferAttribute(desert, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
