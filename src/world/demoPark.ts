@@ -56,48 +56,52 @@ export function buildDemoPark(batch: StaticBatch, physics: Physics, scene: THREE
     physics.setOwner(c, { kind: 'building', material: 'metal' });
   }
 
+  // Contents are laid out in the park's original coordinates (north-west corner at 440, 270).
+  const X = (x: number) => x - 440 + x0, Z = (z: number) => z - 270 + z0;
+  const P = (x: number, z: number): [number, number] => [X(x), Z(z)];
+
   // ---- North: cone slalom, crate stacks, and a glass-pane alley to smash down the middle
-  for (let i = 0; i < 12; i++) props.push({ kind: 'cone', x: 470 + i * 7, y: 0, z: 292 + (i % 2) * 7, rot: 0 });
-  crateStack(props, 500, 345, 4);
-  crateStack(props, 545, 345, 5);
-  for (let i = 0; i < 9; i++) props.push({ kind: 'pane', x: 600 + i * 7, y: 0, z: 318, rot: 0 });
-  for (let i = 0; i < 9; i++) props.push({ kind: 'pane', x: 603 + i * 7, y: 0, z: 336, rot: 0 });
+  for (let i = 0; i < 12; i++) props.push({ kind: 'cone', x: X(470 + i * 7), y: 0, z: Z(292 + (i % 2) * 7), rot: 0 });
+  crateStack(props, X(500), Z(345), 4);
+  crateStack(props, X(545), Z(345), 5);
+  for (let i = 0; i < 9; i++) props.push({ kind: 'pane', x: X(600 + i * 7), y: 0, z: Z(318), rot: 0 });
+  for (let i = 0; i < 9; i++) props.push({ kind: 'pane', x: X(603 + i * 7), y: 0, z: Z(336), rot: 0 });
   // Tall crate tower
   for (let lvl = 0; lvl < 7; lvl++)
     for (let i = 0; i < 2; i++)
-      for (let j = 0; j < 2; j++) props.push({ kind: 'crate', x: 745 + i * 1.02, y: lvl * 1.0, z: 300 + j * 1.02, rot: 0 });
+      for (let j = 0; j < 2; j++) props.push({ kind: 'crate', x: X(745 + i * 1.02), y: lvl * 1.0, z: Z(300 + j * 1.02), rot: 0 });
 
   // ---- Middle: mega ramp A launches east into a huge crate pile; barrels and brick walls
-  ramp(batch, physics, [500, 440], [545, 440], 0, 7, 14, [0.55, 0.57, 0.62], 1.6, 12);
-  crateStack(props, 615, 440, 6);
-  crateStack(props, 628, 430, 4);
-  crateStack(props, 628, 450, 4);
-  barrelStack(props, 690, 385, 5);
-  barrelStack(props, 730, 405, 4);
-  barrelStack(props, 470, 395, 4);
-  blockWall(props, 660, 475, 16, 6, false);
-  blockWall(props, 760, 460, 12, 5, true);
+  ramp(batch, physics, P(500, 440), P(545, 440), 0, 7, 14, [0.55, 0.57, 0.62], 1.6, 12);
+  crateStack(props, X(615), Z(440), 6);
+  crateStack(props, X(628), Z(430), 4);
+  crateStack(props, X(628), Z(450), 4);
+  barrelStack(props, X(690), Z(385), 5);
+  barrelStack(props, X(730), Z(405), 4);
+  barrelStack(props, X(470), Z(395), 4);
+  blockWall(props, X(660), Z(475), 16, 6, false);
+  blockWall(props, X(760), Z(460), 12, 5, true);
   // Giant bowling pins
   for (let row = 0; row < 4; row++)
-    for (let i = 0; i <= row; i++) props.push({ kind: 'pin', x: 700 + row * 2.2, y: 0, z: 440 + (i - row / 2) * 2.3, rot: 0 });
+    for (let i = 0; i <= row; i++) props.push({ kind: 'pin', x: X(700 + row * 2.2), y: 0, z: Z(440 + (i - row / 2) * 2.3), rot: 0 });
 
   // ---- South: the stunt show — boost, big ramp, fly over a row of junk cars, land, smash a crate wall
-  ramp(batch, physics, [480, 560], [527, 560], 0, 8.5, 12, [0.95, 0.65, 0.15], 1.5, 12);
-  for (let i = 0; i < 10; i++) parked.push({ style: 'junk', color: [0x8a6d4a, 0x6b7a80, 0x7a4a3a, 0x5a6b4a][i % 4], x: 540 + i * 2.3, z: 560, heading: 0, wrecked: true });
-  ramp(batch, physics, [590, 560], [645, 560], 6.5, 0, 14, [0.95, 0.65, 0.15], 0.8, 12);
+  ramp(batch, physics, P(480, 560), P(527, 560), 0, 8.5, 12, [0.95, 0.65, 0.15], 1.5, 12);
+  for (let i = 0; i < 10; i++) parked.push({ style: 'junk', color: [0x8a6d4a, 0x6b7a80, 0x7a4a3a, 0x5a6b4a][i % 4], x: X(540 + i * 2.3), z: Z(560), heading: 0, wrecked: true });
+  ramp(batch, physics, P(590, 560), P(645, 560), 6.5, 0, 14, [0.95, 0.65, 0.15], 0.8, 12);
   for (let row = 0; row < 4; row++)
-    for (let i = 0; i < 8; i++) props.push({ kind: 'crate', x: 735, y: row * 1.0, z: 556 + (i - 3.5) * 1.02, rot: 0 });
+    for (let i = 0; i < 8; i++) props.push({ kind: 'crate', x: X(735), y: row * 1.0, z: Z(556 + (i - 3.5) * 1.02), rot: 0 });
   // Small kicker jumps
-  ramp(batch, physics, [480, 615], [492, 615], 0, 1.8, 7, [0.9, 0.3, 0.25], 1.4, 6);
-  ramp(batch, physics, [520, 615], [532, 615], 0, 1.8, 7, [0.9, 0.3, 0.25], 1.4, 6);
+  ramp(batch, physics, P(480, 615), P(492, 615), 0, 1.8, 7, [0.9, 0.3, 0.25], 1.4, 6);
+  ramp(batch, physics, P(520, 615), P(532, 615), 0, 1.8, 7, [0.9, 0.3, 0.25], 1.4, 6);
   // A long line of giant dominoes along the south wall
   for (let i = 0; i < 44; i++) {
-    const x = 560 + i * 2.6;
-    props.push({ kind: 'domino', x, y: 0, z: 622 - Math.sin(i * 0.25) * 6, rot: Math.cos(i * 0.25) * 0.25 });
+    const x = X(560 + i * 2.6);
+    props.push({ kind: 'domino', x, y: 0, z: Z(622 - Math.sin(i * 0.25) * 6), rot: Math.cos(i * 0.25) * 0.25 });
   }
 
   // Junk car lot along the east side (light — they crumple and go flying)
   for (let i = 0; i < 7; i++)
-    parked.push({ style: i % 4 === 3 ? 'van' : 'junk', color: [0x8a6d4a, 0x6b7a80, 0x7a4a3a, 0x5a6b4a][i % 4], x: 762, z: 500 + i * 6, heading: Math.PI / 2 + (i % 2) * 0.2, wrecked: true });
+    parked.push({ style: i % 4 === 3 ? 'van' : 'junk', color: [0x8a6d4a, 0x6b7a80, 0x7a4a3a, 0x5a6b4a][i % 4], x: X(762), z: Z(500 + i * 6), heading: Math.PI / 2 + (i % 2) * 0.2, wrecked: true });
   return { props, parked };
 }

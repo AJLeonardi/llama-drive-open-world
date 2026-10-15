@@ -1,7 +1,7 @@
 // Round mini-map (heading-up, follows the car) + a full-screen world map (north-up).
 // The map image is drawn once from the world layout; each frame just transforms it.
 import {
-  ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR_X, LOOP, NYC, RIVER, Road, TRACK, WORLD,
+  ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR_X, LAKE, LOOP, MOUNTAIN, NYC, RIVER, Road, TRACK, WORLD,
 } from '../world/layout';
 
 const S = 0.5; // map pixels per metre
@@ -20,6 +20,7 @@ export const DESTINATIONS: Destination[] = [
   { x: TRACK.cx, z: TRACK.cz, icon: '🏁', label: 'Dirt Track' },
   { x: LOOP.x, z: LOOP.z - 30, icon: '🎢', label: 'Loop' },
   { x: (DEMO_PARK.x0 + DEMO_PARK.x1) / 2, z: (DEMO_PARK.z0 + DEMO_PARK.z1) / 2, icon: '💥', label: 'Demolition Park' },
+  { x: MOUNTAIN.x, z: MOUNTAIN.z, icon: '⛰️', label: 'Thunder Mountain' },
 ];
 
 const ROAD_STYLE: Record<Road['kind'], [string, number]> = {
@@ -53,6 +54,18 @@ function drawWorld(): HTMLCanvasElement {
   const rw = RIVER.halfWidth + RIVER.bank * 0.5;
   g.fillRect(X(HARBOR_X), Z(RIVER.z - rw), (RIVER.x1 - HARBOR_X) * S, rw * 2 * S);
   g.fillRect(0, 0, X(HARBOR_X + 6), h);
+  g.beginPath();
+  g.arc(X(LAKE.x), Z(LAKE.z), (LAKE.r + LAKE.bank * 0.6) * S, 0, Math.PI * 2);
+  g.fill();
+  // Thunder Mountain: rocky ring (the spiral road) around a grassy top.
+  g.fillStyle = '#8c7a68';
+  g.beginPath();
+  g.arc(X(MOUNTAIN.x), Z(MOUNTAIN.z), (MOUNTAIN.r + MOUNTAIN.road + 4) * S, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#5f9a45';
+  g.beginPath();
+  g.arc(X(MOUNTAIN.x), Z(MOUNTAIN.z), MOUNTAIN.r * S, 0, Math.PI * 2);
+  g.fill();
   // Roads (outline first so they read on light city ground)
   g.lineCap = 'round';
   g.lineJoin = 'round';

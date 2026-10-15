@@ -65,6 +65,10 @@ export class Breakable {
   private moving = new Set<Prop>();
   private fountains: Prop[] = [];
   private chunkGeo = new Map<PropKind, THREE.BufferGeometry>();
+  /** Exploding barrels about to go off (chain reactions ripple outwards). */
+  private fuses: { prop: Prop; t: number }[] = [];
+  /** Called for every explosion (the game adds the fireball, boom and the push on cars). */
+  onBlast: (at: THREE.Vector3) => void = () => {};
 
   constructor(private readonly physics: Physics, private readonly spawns: PropSpawn[]) {
     const tileKey = (sp: PropSpawn) => `${sp.kind}|${Math.floor(sp.x / TILE)},${Math.floor(sp.z / TILE)}`;
@@ -114,6 +118,7 @@ export class Breakable {
     this.loaded.clear();
     this.moving.clear();
     this.fountains = [];
+    this.fuses = [];
     this.streamTimer = 0;
     this.spawns.forEach((s, i) => {
       const def = PROP_DEFS[s.kind];
@@ -242,6 +247,41 @@ export class Breakable {
     return res;
   }
 
+  /** Blow up an exploding barrel: it's gone, nearby things get thrown, nearby barrels go off next. */
+  explode(prop: Prop, particles: Particles, debris: Debris) {
+    if (prop.removed || !prop.body) return;
+    const t = prop.body.translation();
+    const center = new THREE.Vector3(t.x, t.y, t.z);
+    this.shatter(prop, { x: 0, y: 1, z: 0 }, particles, debris);
+    const R = 11;
+    for (const p of this.props) {
+      if (!p.body || p.removed) continue;
+      const b = p.body.translation();
+      const dx = b.x - center.x, dy = b.y - center.y, dz = b.z - center.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > R) continue;
+      const def = PROP_DEFS[p.kind];
+      if (def.explosive) {
+        // Ripple outwards: closer barrels go first.
+        if (!this.fuses.some((f) => f.prop === p)) this.fuses.push({ prop: p, t: 0.07 + d * 0.05 + Math.random() * 0.05 });
+        continue;
+      }
+      const fall = 1 - d / R;
+      if (p.fixed) {
+        // Posts, trees and benches close to the blast get knocked flat.
+        if (fall < 0.45 || p.kind === 'tree') continue;
+        p.fixed = false;
+        p.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+        this.moving.add(p);
+      }
+      const k = def.mass * 14 * fall;
+      const inv = 1 / Math.max(0.5, d);
+      p.body.applyImpulse({ x: dx * inv * k, y: k * 0.8, z: dz * inv * k }, true);
+      p.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * k * 0.3, y: 0, z: (Math.random() - 0.5) * k * 0.3 }, true);
+    }
+    this.onBlast(center);
+  }
+
   private shatter(prop: Prop, normal: THREE.Vector3Like, particles: Particles, debris: Debris) {
     const def = PROP_DEFS[prop.kind];
     const body = prop.body!;
@@ -284,7 +324,7 @@ export class Breakable {
     else particles.splinters(center, 20, def.chunkColor);
   }
 
-  update(dt: number, particles: Particles, camera: THREE.Vector3, player: THREE.Vector3Like) {
+  update(dt: number, particles: Particles, debris: Debris, camera: THREE.Vector3, player: THREE.Vector3Like) {
     this.streamTimer -= dt;
     if (this.streamTimer <= 0) {
       this.streamTimer = 0.25;
@@ -305,6 +345,14 @@ export class Breakable {
       touched.add(p.mesh);
     }
     for (const mesh of touched) mesh.instanceMatrix.needsUpdate = true;
+
+    for (let i = this.fuses.length - 1; i >= 0; i--) {
+      const f = this.fuses[i];
+      f.t -= dt;
+      if (f.t > 0) continue;
+      this.fuses.splice(i, 1);
+      this.explode(f.prop, particles, debris);
+    }
 
     for (const f of this.fountains) {
       if (f.fountain <= 0) continue;

@@ -100,13 +100,37 @@ export class Particles {
   private sparks = new Pool(220, true, 9.8, 0.3);
   private bits = new Pool(260, false, 9.8, 0.2); // glass, splinters, dust chunks
   private puffs = new Pool(260, false, 1.5, 2.5); // dust, spray
+  private fire = new Pool(240, true, -3, 2.2); // explosions: glowing, rising, slowing fast
+  private pools = [this.smoke, this.sparks, this.bits, this.puffs, this.fire];
 
   constructor() {
-    for (const p of [this.smoke, this.sparks, this.bits, this.puffs]) this.group.add(p.points);
+    for (const p of this.pools) this.group.add(p.points);
   }
 
   setViewportHeight(px: number) {
-    for (const p of [this.smoke, this.sparks, this.bits, this.puffs]) p.setScale(px * 0.9);
+    for (const p of this.pools) p.setScale(px * 0.9);
+  }
+
+  /** Big cartoon fireball: a flash, rolling flames, sparks, flying bits and a smoke column. */
+  explosion(at: THREE.Vector3Like) {
+    this.fire.emit(at, v.set(0, 1, 0), c.setRGB(1, 0.95, 0.75), 7, 0.25, 10, 1);
+    for (let i = 0; i < 26; i++) {
+      const s = 7 + Math.random() * 7;
+      const hot = Math.random();
+      this.fire.emit(
+        { x: at.x + rnd(0.8), y: at.y + Math.random() * 0.8, z: at.z + rnd(0.8) },
+        v.set(rnd(1), 0.3 + Math.random(), rnd(1)).normalize().multiplyScalar(s),
+        c.setRGB(1, 0.35 + hot * 0.5, 0.05 + hot * 0.15), 1.6 + Math.random() * 1.6, 0.55 + Math.random() * 0.5, 2.5, 0.9,
+      );
+    }
+    for (let i = 0; i < 40; i++)
+      this.sparks.emit(at, v.set(rnd(14), 4 + Math.random() * 14, rnd(14)), c.setRGB(1, 0.7 + Math.random() * 0.3, 0.25), 0.12, 0.6 + Math.random() * 0.8);
+    for (let i = 0; i < 18; i++)
+      this.bits.emit(at, v.set(rnd(9), 5 + Math.random() * 9, rnd(9)), c.setRGB(0.25, 0.08, 0.06), 0.16, 1.6);
+    for (let i = 0; i < 14; i++) {
+      const g = 0.18 + Math.random() * 0.15;
+      this.smoke.emit({ x: at.x + rnd(1.5), y: at.y + 1 + Math.random() * 2, z: at.z + rnd(1.5) }, v.set(rnd(1.5), 2 + Math.random() * 3, rnd(1.5)), c.setRGB(g, g, g), 1.8, 3 + Math.random() * 1.5, 1.6, 0.7);
+    }
   }
 
   /** Engine smoke: grey, gets darker as damage gets worse. */
@@ -145,5 +169,6 @@ export class Particles {
     this.sparks.update(dt);
     this.bits.update(dt);
     this.puffs.update(dt);
+    this.fire.update(dt);
   }
 }

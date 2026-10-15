@@ -60,14 +60,15 @@ export class Game {
   private upsideTimer = 0;
   private smokeAcc = 0;
   private titleAngle = 0;
+  private lastBlast = 0;
   private pixelRatio: number;
   private maxPixelRatio: number;
   private perf = { frames: 0, time: 0, lastRaise: 0 };
   private sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
   /** 2 = sharp shadows, 1 = softer/smaller shadow map, 0 = no shadows (slow devices). */
   private shadowTier = 1;
-  // Debug overlay (FPS, crash log, window.__game) only with ?debug in the URL.
-  private readonly debug = new URLSearchParams(location.search).has('debug');
+  // Debug overlay is ON by default while we test on different devices; add ?debug=0 to hide it.
+  private readonly debug = new URLSearchParams(location.search).get('debug') !== '0';
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -157,6 +158,7 @@ export class Game {
     this.physics = new Physics();
     const t0 = performance.now();
     this.world = new World(this.physics);
+    this.world.props.onBlast = (at) => this.blast(at);
     if (this.debug) console.log(`[perf] world built in ${(performance.now() - t0).toFixed(0)} ms`);
     this.scene.add(this.world.group);
     this.debris = new Debris(this.physics, this.scene);
@@ -274,7 +276,7 @@ export class Game {
     switch (this.state) {
       case 'title':
         this.titleCamera(dt);
-        this.world.update(dt, this.camera.position, this.particles);
+        this.world.update(dt, this.camera.position, this.particles, this.debris);
         this.renderer.render(this.scene, this.camera);
         break;
       case 'select':
@@ -302,8 +304,9 @@ export class Game {
   private titleCamera(dt: number) {
     this.titleAngle += dt * 0.05;
     const a = this.titleAngle;
-    this.camera.position.set(-1500 + Math.sin(a) * 120, 45, 40 + Math.cos(a) * 120);
-    this.camera.lookAt(-1800, 25, -40);
+    // A slow circle high over the highway, looking at the Boston skyline.
+    this.camera.position.set(-40 + Math.sin(a) * 150, 75, Math.cos(a) * 150);
+    this.camera.lookAt(-360, 30, -30);
     this.sky.position.copy(this.camera.position);
   }
 
@@ -350,7 +353,7 @@ export class Game {
     if (this.state === 'sinking') this.cameras.updateUnderwater(dt, car.model.root.position);
     else this.cameras.update(dt, car);
     this.sky.position.copy(this.camera.position);
-    this.world.update(dt, this.camera.position, this.particles, car.model.root.position);
+    this.world.update(dt, this.camera.position, this.particles, this.debris, car.model.root.position);
     this.buildingDamage.update(dt, this.particles);
     this.particles.update(dt);
     this.debris.update();
@@ -364,6 +367,11 @@ export class Game {
 
   private handleImpact(imp: Impact) {
     const car = this.car!;
+    // Exploding barrels: any real bump sets them off (the blast does the rest).
+    if (imp.other?.kind === 'prop' && PROP_DEFS[(imp.other.ref as Prop).kind].explosive) {
+      if (imp.closing > 1.5) this.world.props.explode(imp.other.ref as Prop, this.particles, this.debris);
+      return;
+    }
     // Breakaway posts (light poles, hydrants…): hit fast enough and they snap off.
     // The car keeps most of its speed and only feels a small knock.
     if (imp.other?.kind === 'prop') {
@@ -407,6 +415,46 @@ export class Game {
     if (r.glassBroke) this.audio.glass();
     if (r.partsLost.length) this.audio.partFall();
     if (o?.kind !== 'ground' || r.dv > 4) this.cameras.addShake(Math.min(1, r.dv / 18));
+  }
+
+  /** An exploding barrel went off: fireball, boom, shake, and a big shove for anything close. */
+  private blast(at: THREE.Vector3) {
+    this.particles.explosion(at);
+    const car = this.car;
+    const pos = car && this.state !== 'title' ? car.model.root.position : this.camera.position;
+    const d = pos.distanceTo(at);
+    this.audio.explosion(Math.max(0.15, 1 - d / 260));
+    if (this.state === 'title' || !car) return;
+    this.cameras.addShake(Math.min(1, 10 / Math.max(1, d)));
+    const R = 12;
+    for (const p of this.world.parked) {
+      if (!p.body) continue;
+      const t = p.body.translation();
+      const pd = Math.hypot(t.x - at.x, t.z - at.z);
+      if (pd > R) continue;
+      const k = p.mass * 9 * (1 - pd / R);
+      p.body.applyImpulse({ x: ((t.x - at.x) / (pd || 1)) * k * 0.6, y: k, z: ((t.z - at.z) / (pd || 1)) * k * 0.6 }, true);
+    }
+    if (d > R || (this.state !== 'drive' && this.state !== 'wrecked')) return;
+    // Barrels in a chain reaction keep shoving, but only the first one launches the car.
+    const now = performance.now();
+    const k = (now - this.lastBlast < 600 ? 0.25 : 1) * (1 - d / R);
+    this.lastBlast = now;
+    const body = car.sim.body;
+    const m = car.spec.mass;
+    const dx = pos.x - at.x, dz = pos.z - at.z, h = Math.hypot(dx, dz) || 1;
+    const dv = 10 * k;
+    body.applyImpulse({ x: (dx / h) * dv * 0.6 * m, y: dv * m, z: (dz / h) * dv * 0.6 * m }, true);
+    // A bit of tumble (the flip button sorts out a car left on its roof).
+    body.applyTorqueImpulse({ x: (dz / h) * m * 1.6 * k, y: (Math.random() - 0.5) * m * 0.6 * k, z: (-dx / h) * m * 1.6 * k }, true);
+    // Dents on the side facing the blast.
+    const r = car.applyImpact({
+      otherHandle: -1, other: undefined, impulse: m * 9 * k, closing: 0, preVel: body.linvel(),
+      point: { x: pos.x - (dx / h) * 1.2, y: pos.y + 0.7, z: pos.z - (dz / h) * 1.2 },
+      normal: { x: -dx / h, y: 0, z: -dz / h },
+    }, this.particles, this.debris);
+    if (r.glassBroke) this.audio.glass();
+    if (r.partsLost.length) this.audio.partFall();
   }
 
   /** Returns true if the car was replaced (restart), so the caller must stop using it. */

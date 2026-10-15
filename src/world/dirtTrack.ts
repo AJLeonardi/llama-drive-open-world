@@ -22,9 +22,9 @@ function solid(batch: StaticBatch, physics: Physics, material: string, pos: numb
 
 /**
  * A ramp from `a` to `b` (ground x,z), rising from h0 to h1 (with an optional curve,
- * >1 = kicker that gets steeper at the top), `w` wide. Solid underneath.
+ * >1 = kicker that gets steeper at the top), `w` wide. Solid underneath, down to `base`.
  */
-export function ramp(batch: StaticBatch, physics: Physics, a: [number, number], b: [number, number], h0: number, h1: number, w: number, color: [number, number, number], curve = 1, steps = 10) {
+export function ramp(batch: StaticBatch, physics: Physics, a: [number, number], b: [number, number], h0: number, h1: number, w: number, color: [number, number, number], curve = 1, steps = 10, base = 0) {
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
   const dx = (b[0] - a[0]) / len, dz = (b[1] - a[1]) / len;
   const px = -dz, pz = dx; // across the ramp
@@ -35,7 +35,7 @@ export function ramp(batch: StaticBatch, physics: Physics, a: [number, number], 
     const h = h0 + (h1 - h0) * Math.pow(t, curve);
     const cx = a[0] + dx * len * t, cz = a[1] + dz * len * t;
     // top-left, top-right, bottom-left, bottom-right (left = -perp)
-    pos.push(cx - px * hw, h, cz - pz * hw, cx + px * hw, h, cz + pz * hw, cx - px * hw, 0, cz - pz * hw, cx + px * hw, 0, cz + pz * hw);
+    pos.push(cx - px * hw, h, cz - pz * hw, cx + px * hw, h, cz + pz * hw, cx - px * hw, base, cz - pz * hw, cx + px * hw, base, cz + pz * hw);
     // Stripes on the top so ramps read clearly
     const stripe = i % 2 ? 1 : 0.82;
     for (let k = 0; k < 4; k++) col.push(color[0] * (k < 2 ? stripe : 0.7), color[1] * (k < 2 ? stripe : 0.7), color[2] * (k < 2 ? stripe : 0.7));
@@ -127,18 +127,20 @@ export function buildDirtTrack(batch: StaticBatch, physics: Physics, scene: THRE
   loop(batch, physics);
 
   // Infield stunt area: tabletop jump, kicker pairs, crate walls and dominoes.
+  // Laid out in the track's original coordinates (centre at -600, -420).
+  const X = (x: number) => x + 600 + TRACK.cx, Z = (z: number) => z + 420 + TRACK.cz;
   const ic: [number, number, number] = [0.62, 0.45, 0.3];
-  ramp(batch, physics, [-705, -420], [-688, -420], 0, 3.5, 12, ic, 1.2);
-  ramp(batch, physics, [-688, -420], [-664, -420], 3.5, 3.5, 12, ic, 1, 2); // the table
-  ramp(batch, physics, [-664, -420], [-644, -420], 3.5, 0, 12, ic, 0.9);
-  for (const z of [-385, -455]) {
-    ramp(batch, physics, [-610, z], [-598, z], 0, 2.4, 8, [0.85, 0.35, 0.25], 1.4, 8);
-    ramp(batch, physics, [-572, z], [-556, z], 2.0, 0, 9, [0.85, 0.35, 0.25], 0.9, 8);
+  ramp(batch, physics, [X(-705), Z(-420)], [X(-688), Z(-420)], 0, 3.5, 12, ic, 1.2);
+  ramp(batch, physics, [X(-688), Z(-420)], [X(-664), Z(-420)], 3.5, 3.5, 12, ic, 1, 2); // the table
+  ramp(batch, physics, [X(-664), Z(-420)], [X(-644), Z(-420)], 3.5, 0, 12, ic, 0.9);
+  for (const z of [Z(-385), Z(-455)]) {
+    ramp(batch, physics, [X(-610), z], [X(-598), z], 0, 2.4, 8, [0.85, 0.35, 0.25], 1.4, 8);
+    ramp(batch, physics, [X(-572), z], [X(-556), z], 2.0, 0, 9, [0.85, 0.35, 0.25], 0.9, 8);
   }
-  for (const x of [-515, -500])
+  for (const x of [X(-515), X(-500)])
     for (let row = 0; row < 3; row++)
-      for (let i = 0; i < 9; i++) props.push({ kind: 'crate', x, y: row * 1.0, z: -420 + (i - 4) * 1.02, rot: 0 });
-  for (let i = 0; i < 18; i++) props.push({ kind: 'domino', x: -640 + i * 2.6, y: 0, z: -490 + 0, rot: 0 });
+      for (let i = 0; i < 9; i++) props.push({ kind: 'crate', x, y: row * 1.0, z: Z(-420) + (i - 4) * 1.02, rot: 0 });
+  for (let i = 0; i < 18; i++) props.push({ kind: 'domino', x: X(-640) + i * 2.6, y: 0, z: Z(-490), rot: 0 });
 
   // Tire walls around the inside of both turns.
   const { cx, cz, halfStraight: hs, radius: r, width: tw } = TRACK;

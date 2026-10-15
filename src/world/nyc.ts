@@ -3,11 +3,13 @@
 import * as THREE from 'three';
 import { Physics } from '../physics/Physics';
 import { Rect, mulberry32, pick, rand } from '../util/math';
-import { CENTRAL_PARK, CITY_ROADS, NYC, Road } from './layout';
+import { CENTRAL_PARK, CITY_ROADS, NYC, Road, nycX } from './layout';
 import { StaticBatch } from './batch';
 import { addBuilding, placeBuildings } from './buildings';
 import { block, waterTower } from './landmarks';
 import { parkTrees, placeStreetLife } from './streetLife';
+import { stuntKeepOut } from './cityStunts';
+import { tntPyramid } from './propModels';
 import { cyl } from '../vehicles/builders/geo';
 import type { PropSpawn } from './propModels';
 import { billboardTexture } from '../util/textures';
@@ -19,10 +21,10 @@ const aabbRect = (b: { x0: number; z0: number; x1: number; z1: number }): Rect =
 export function buildNYC(batch: StaticBatch, physics: Physics, scene: THREE.Object3D) {
   const rng = mulberry32(1624);
   const roads: Road[] = CITY_ROADS.filter((r) => r.pts.every(([x]) => x >= NYC.x0 - 1));
-  const keepOut: Rect[] = [aabbRect(CENTRAL_PARK)];
+  const keepOut: Rect[] = [aabbRect(CENTRAL_PARK), ...stuntKeepOut()];
 
   // Empire-State-style tower: stacked setbacks and a spire.
-  const ex = 1940, ez = 105;
+  const ex = nycX(1940), ez = 105;
   keepOut.push(block(batch, physics, ex, ez, 50, 40, 0, 25, 'stone', 0xfff4e0));
   block(batch, physics, ex, ez, 38, 30, 25, 110, 'stone', 0xfff4e0);
   block(batch, physics, ex, ez, 28, 22, 135, 95, 'stone', 0xfff4e0);
@@ -52,7 +54,7 @@ export function buildNYC(batch: StaticBatch, physics: Physics, scene: THREE.Obje
   const bbMats = [1, 2, 3, 4, 5, 6].map((s) => new THREE.MeshBasicMaterial({ map: billboardTexture(s) }));
   let bbCount = 0;
   for (const b of buildings) {
-    if (Math.hypot(b.rect.cx - 1890, b.rect.cz + 50) > 170 || bbCount > 26) continue;
+    if (Math.hypot(b.rect.cx - nycX(1890), b.rect.cz + 50) > 170 || bbCount > 26) continue;
     const { cx, cz, hw, hd, rot } = b.rect;
     for (const side of [-1, 1]) {
       const w = hw * 1.4, h = w / 2;
@@ -76,5 +78,9 @@ export function buildNYC(batch: StaticBatch, physics: Physics, scene: THREE.Obje
   });
   const props: PropSpawn[] = [...life.props, ...parkTrees(CENTRAL_PARK, 90, rng)];
   for (let i = 0; i < 14; i++) props.push({ kind: 'bench', x: rand(rng, CENTRAL_PARK.x0 + 8, CENTRAL_PARK.x1 - 8), y: 0, z: rand(rng, CENTRAL_PARK.z0 + 8, CENTRAL_PARK.z1 - 8), rot: rand(rng, 0, 6.28) });
-  return { props, parked: life.parked };
+  // Exploding barrels in the park.
+  tntPyramid(props, (CENTRAL_PARK.x0 + CENTRAL_PARK.x1) / 2, CENTRAL_PARK.z1 - 20, 4, 0);
+  tntPyramid(props, CENTRAL_PARK.x0 + 40, (CENTRAL_PARK.z0 + CENTRAL_PARK.z1) / 2, 3, Math.PI / 2);
+  const clear = (x: number, z: number) => !stuntKeepOut().some((r) => Math.abs(x - r.cx) < r.hw && Math.abs(z - r.cz) < r.hd);
+  return { props: props.filter((p) => clear(p.x, p.z)), parked: life.parked.filter((p) => clear(p.x, p.z)) };
 }

@@ -2,11 +2,13 @@
 // state house by the Common, a famous-style neon sign, two tall towers, harbor piers.
 import { Physics, RAPIER } from '../physics/Physics';
 import { Rect, mulberry32, pick, rand } from '../util/math';
-import { BOSTON, BOSTON_COMMON, CITY_ROADS, HARBOR_X, Road } from './layout';
+import { BOSTON, BOSTON_COMMON, CITY_ROADS, HARBOR_X, Road, bostonX } from './layout';
 import { StaticBatch } from './batch';
 import { Building, addBuilding, placeBuildings } from './buildings';
 import { block, columns, dome, huntingtonTower, neonSign, prudentialTower } from './landmarks';
 import { parkTrees, placeStreetLife } from './streetLife';
+import { stuntKeepOut } from './cityStunts';
+import { tntPyramid } from './propModels';
 import { box } from '../vehicles/builders/geo';
 import type { PropSpawn } from './propModels';
 import { inAABB } from '../util/math';
@@ -18,20 +20,20 @@ const aabbRect = (b: { x0: number; z0: number; x1: number; z1: number }): Rect =
 export function buildBoston(batch: StaticBatch, physics: Physics) {
   const rng = mulberry32(1630);
   const roads: Road[] = CITY_ROADS.filter((r) => r.pts.every(([x, z]) => x <= BOSTON.x1 + 1 && z >= BOSTON.z0 - 1 && z <= BOSTON.z1 + 1));
-  const keepOut: Rect[] = [aabbRect(BOSTON_COMMON)];
+  const keepOut: Rect[] = [aabbRect(BOSTON_COMMON), ...stuntKeepOut()];
 
   // --- Landmarks
   // State house: brick with white columns and a gold dome, facing the Common.
-  keepOut.push(block(batch, physics, -1760, 178, 40, 22, 0, 14, 'brick', 0xffe0d0));
-  dome(batch, -1760, 14, 178, 8, 0xe8b923);
-  columns(batch, -1772, -1748, 165.5, 0, 12, 6);
+  keepOut.push(block(batch, physics, bostonX(-1760), 178, 40, 22, 0, 14, 'brick', 0xffe0d0));
+  dome(batch, bostonX(-1760), 14, 178, 8, 0xe8b923);
+  columns(batch, bostonX(-1772), bostonX(-1748), 165.5, 0, 12, 6);
   // Tall towers
-  keepOut.push(prudentialTower(batch, physics, -1640, -60));
-  keepOut.push(huntingtonTower(batch, physics, -1585, -95));
-  keepOut.push(block(batch, physics, -1612, 50, 22, 40, 0, 120, 'glass', 0xd8e8ff, 0.5));
+  keepOut.push(prudentialTower(batch, physics, bostonX(-1640), -60));
+  keepOut.push(huntingtonTower(batch, physics, bostonX(-1585), -95));
+  keepOut.push(block(batch, physics, bostonX(-1612), 50, 22, 40, 0, 120, 'glass', 0xd8e8ff, 0.5));
   // Building with the big neon sign on top
-  keepOut.push(block(batch, physics, -1610, -150, 30, 26, 0, 22, 'brick', 0xf0d8c8));
-  neonSign(batch, -1610, 22, -150, Math.PI / 2);
+  keepOut.push(block(batch, physics, bostonX(-1610), -150, 30, 26, 0, 22, 'brick', 0xf0d8c8));
+  neonSign(batch, bostonX(-1610), 22, -150, Math.PI / 2);
 
   // Harbor piers you can drive off into the water.
   for (const z of [-120, 140, 300]) {
@@ -46,7 +48,7 @@ export function buildBoston(batch: StaticBatch, physics: Physics) {
   }
 
   // --- Buildings
-  const downtown = (x: number, z: number) => x > -1780 && z > -240 && z < 170;
+  const downtown = (x: number, z: number) => x > bostonX(-1780) && z > -240 && z < 170;
   const buildings: Building[] = placeBuildings({
     roads, bounds: BOSTON, keepOut, rng,
     frontage: [9, 18], depth: [12, 22], setback: 4, gap: [0.5, 3],
@@ -71,6 +73,10 @@ export function buildBoston(batch: StaticBatch, physics: Physics) {
     ...parkTrees(BOSTON_COMMON, 40, rng),
   ];
   // Benches in the Common
-  for (let i = 0; i < 8; i++) props.push({ kind: 'bench', x: rand(rng, -1810, -1710), y: 0, z: rand(rng, 45, 140), rot: rand(rng, 0, 6.28) });
-  return { props: props.filter((p) => inAABB(p.x, p.z, BOSTON)), parked: life.parked };
+  for (let i = 0; i < 8; i++) props.push({ kind: 'bench', x: rand(rng, bostonX(-1810), bostonX(-1710)), y: 0, z: rand(rng, 45, 140), rot: rand(rng, 0, 6.28) });
+  // Exploding barrels on the Common.
+  tntPyramid(props, bostonX(-1790), 120, 4, 0.4);
+  // Street furniture and parked cars stay clear of the stunt buildings.
+  const clear = (x: number, z: number) => !stuntKeepOut().some((r) => Math.abs(x - r.cx) < r.hw && Math.abs(z - r.cz) < r.hd);
+  return { props: props.filter((p) => inAABB(p.x, p.z, BOSTON) && clear(p.x, p.z)), parked: life.parked.filter((p) => clear(p.x, p.z)) };
 }

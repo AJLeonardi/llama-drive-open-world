@@ -5,7 +5,7 @@ import { crateTexture } from '../util/textures';
 
 export type PropKind =
   | 'cone' | 'barrel' | 'crate' | 'block' | 'pin' | 'tire' | 'barrier'
-  | 'pole' | 'hydrant' | 'mailbox' | 'bench' | 'tree' | 'rail' | 'domino' | 'pane';
+  | 'pole' | 'hydrant' | 'mailbox' | 'bench' | 'tree' | 'rail' | 'domino' | 'pane' | 'tnt';
 
 /**
  * - loose:   ordinary physics object, just gets knocked around
@@ -31,6 +31,8 @@ export interface PropDef {
    * while the car barely slows and takes only light damage. Slower = it holds.
    */
   breakaway?: number;
+  /** Blows up when the car hits it (and sets off others nearby). */
+  explosive?: boolean;
 }
 
 const halfHeight = (d: PropDef) => (d.shape.type === 'box' ? d.shape.hy : d.shape.hh);
@@ -184,6 +186,20 @@ export const PROP_DEFS: Record<PropKind, PropDef> = {
     ]),
     shape: { type: 'box', hx: 0.08, hy: 1.25, hz: 1.25 }, mass: 40, toughness: 250, style: 'shatter', fixed: false, material_: 'glass', chunkColor: 0xbfe3f5,
   },
+  // Exploding barrel: bright red with a yellow-and-black hazard band. Bump it and BOOM.
+  tnt: {
+    geo: () => merge([
+      cyl({
+        at: [0, 0, 0], radius: 0.34, length: 1.0, axis: 'y', segments: 16, heightSegments: 10,
+        color: (_x, y) => (Math.abs(y) < 0.13 ? 0xffc400 : Math.abs(y) < 0.17 || Math.abs(y) > 0.44 ? 0x1a1a1a : 0xd61f1f),
+      }),
+      cyl({ at: [0, 0.505, 0], radius: 0.3, length: 0.02, axis: 'y', segments: 16, color: 0xf2f2f2 }),
+      cyl({ at: [0.14, 0.53, 0.08], radius: 0.05, length: 0.06, axis: 'y', segments: 8, color: 0x1a1a1a }),
+    ]),
+    material: () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.2, emissive: 0x3a0000 }),
+    shape: { type: 'cyl', hh: 0.5, r: 0.34 }, mass: 30, toughness: 300, style: 'shatter', fixed: false, material_: 'metal', chunkColor: 0xd61f1f,
+    explosive: true,
+  },
   tree: {
     geo: treeGeo,
     shape: { type: 'cyl', hh: 2.1, r: 0.3 }, mass: 400, toughness: 16000, style: 'topple', fixed: true, material_: 'wood', chunkColor: 0x3f8f3a,
@@ -198,4 +214,17 @@ export interface PropSpawn {
   z: number;
   rot: number;
   color?: number;
+}
+
+/**
+ * Exploding barrels stacked into a pyramid (a triangle wall, `base` barrels wide),
+ * running along heading `rot` from (x, z), standing on ground height `y`.
+ */
+export function tntPyramid(props: PropSpawn[], x: number, z: number, base: number, rot: number, y = 0) {
+  const ux = Math.cos(rot), uz = -Math.sin(rot);
+  for (let row = 0; row < base; row++)
+    for (let i = 0; i < base - row; i++) {
+      const o = (i - (base - row - 1) / 2) * 0.72;
+      props.push({ kind: 'tnt', x: x + ux * o, y: y + row * 1.0, z: z + uz * o, rot: 0 });
+    }
 }

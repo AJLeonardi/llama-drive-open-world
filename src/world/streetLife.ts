@@ -11,6 +11,8 @@ export interface ParkedSpawn {
   z: number;
   heading: number;
   wrecked?: boolean;
+  /** Height of the floor it's parked on (garage decks); ground if left out. */
+  y?: number;
 }
 
 export const CAR_COLORS = [0xc0392b, 0x2e86de, 0x27ae60, 0xf5f6fa, 0x2d3436, 0x8e44ad, 0xe67e22, 0x7f8c8d, 0x16a085, 0xb33771];

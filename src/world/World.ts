@@ -12,6 +12,8 @@ import { buildNYC } from './nyc';
 import { buildHighway } from './highway';
 import { buildDirtTrack } from './dirtTrack';
 import { buildDemoPark } from './demoPark';
+import { buildMountain } from './mountain';
+import { buildCityStunts } from './cityStunts';
 import type { PropSpawn } from './propModels';
 import type { ParkedSpawn } from './streetLife';
 import { boostTexture, dirtRoadTexture, groundTexture, roadTexture, sidewalkTexture, storefrontTexture, windowTexture, WindowStyle } from '../util/textures';
@@ -83,6 +85,8 @@ export class World {
     const highway = buildHighway(batch, physics, this.group, this.terrain);
     const track = buildDirtTrack(batch, physics, this.group);
     const park = buildDemoPark(batch, physics, this.group);
+    const mountain = buildMountain(batch, physics, this.group, this.terrain);
+    const stunts = buildCityStunts(batch, physics, this.group);
 
     this.tiles = batch.build(materials());
     for (const t of this.tiles) {
@@ -94,18 +98,18 @@ export class World {
     }
     for (const w of waterMeshes()) this.group.add(w);
 
-    const spawns: PropSpawn[] = [...railProps, ...boston.props, ...nyc.props, ...highway.props, ...track.props, ...park.props];
+    const spawns: PropSpawn[] = [...railProps, ...boston.props, ...nyc.props, ...highway.props, ...track.props, ...park.props, ...mountain.props, ...stunts.props];
     this.props = new Breakable(physics, spawns);
     this.group.add(this.props.group);
 
-    this.parkedSpawns = [...boston.parked, ...nyc.parked, ...park.parked];
+    this.parkedSpawns = [...boston.parked, ...nyc.parked, ...park.parked, ...stunts.parked];
     this.spawnParked();
   }
 
   private spawnParked() {
     for (const p of this.parked) p.dispose();
     this.parked = this.parkedSpawns.map((s) => {
-      const car = new ParkedCar(this.physics, s.style, s.color, s.x, 0.02, s.z, s.heading, s.wrecked);
+      const car = new ParkedCar(this.physics, s.style, s.color, s.x, (s.y ?? 0) + 0.02, s.z, s.heading, s.wrecked);
       this.group.add(car.mesh);
       return car;
     });
@@ -125,7 +129,7 @@ export class World {
     return { tiles: this.tiles.length, parked: this.parked.length };
   }
 
-  update(dt: number, camera: THREE.Vector3, particles: import('../fx/Particles').Particles, player: THREE.Vector3 = camera) {
+  update(dt: number, camera: THREE.Vector3, particles: import('../fx/Particles').Particles, debris: import('../fx/Debris').Debris, player: THREE.Vector3 = camera) {
     this.tileTimer -= dt;
     if (this.tileTimer <= 0) {
       this.tileTimer = 0.4;
@@ -138,7 +142,7 @@ export class World {
         else if (d2 > 210 * 210) p.deactivate();
       }
     }
-    this.props.update(dt, particles, camera, player);
+    this.props.update(dt, particles, debris, camera, player);
     for (const p of this.parked) p.sync();
   }
 }

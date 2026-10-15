@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Physics, RAPIER } from '../physics/Physics';
-import { TERRAIN_CELL, WATER_LEVEL, WORLD, HARBOR_X, RIVER, heightAt, surfaceAt } from './layout';
+import { LAKE, TERRAIN_CELL, WATER_LEVEL, WORLD, HARBOR_X, RIVER, heightAt, surfaceAt } from './layout';
 import { StaticBatch, TILE } from './batch';
 import { valueNoise } from '../util/math';
 import type { Surface } from '../physics/surfaces';
@@ -53,6 +53,8 @@ const GROUND_COLORS: Record<Surface, [number, number, number]> = {
   asphalt: [0.3, 0.3, 0.32],
 };
 
+const ROCK = [0.46, 0.41, 0.36];
+
 /** Terrain meshes, one per batch tile, with surface-based vertex colours. */
 export function addTerrainMeshes(batch: StaticBatch, t: Terrain) {
   const per = TILE / TERRAIN_CELL;
@@ -71,8 +73,14 @@ export function addTerrainMeshes(batch: StaticBatch, t: Terrain) {
           const base = GROUND_COLORS[s];
           const n = 0.88 + 0.24 * valueNoise(x / 40, z / 40);
           // Hills get a little lighter on top.
-          const lift = s === 'grass' ? Math.min(0.12, Math.max(0, y) * 0.006) : 0;
-          col.push(base[0] * n + lift, base[1] * n + lift, base[2] * n + lift * 0.5);
+          const lift = s === 'grass' ? Math.min(0.12, Math.max(0, y) * 0.004) : 0;
+          // Steep slopes (cliffs, terrace drop-offs) show bare rock.
+          const gc = c0 + c, gr = r0 + r;
+          const hgt = (rr: number, cc: number) => t.heights[Math.min(t.rows - 1, Math.max(0, rr)) * t.cols + Math.min(t.cols - 1, Math.max(0, cc))];
+          const slope = Math.hypot(hgt(gr, gc + 1) - hgt(gr, gc - 1), hgt(gr + 1, gc) - hgt(gr - 1, gc)) / (2 * TERRAIN_CELL);
+          const rock = s === 'grass' || s === 'dirt' ? Math.min(1, Math.max(0, (slope - 0.45) * 2.5)) : 0;
+          const rn = 0.8 + 0.3 * valueNoise(x / 9, y / 6);
+          for (let k = 0; k < 3; k++) col.push((base[k] * n + (k < 2 ? lift : lift * 0.5)) * (1 - rock) + ROCK[k] * rn * rock);
         }
       for (let r = 0; r < nr; r++)
         for (let c = 0; c < nc; c++) {
@@ -102,5 +110,10 @@ export function waterMeshes(): THREE.Mesh[] {
     return m;
   };
   const w = RIVER.halfWidth + RIVER.bank;
-  return [mk(HARBOR_X + 6, RIVER.x1, RIVER.z - w, RIVER.z + w), mk(WORLD.x0, HARBOR_X + 6, WORLD.z0, WORLD.z1)];
+  const lake = new THREE.Mesh(new THREE.CircleGeometry(LAKE.r + LAKE.bank * 0.7, 48), mat);
+  lake.geometry.rotateX(-Math.PI / 2);
+  lake.geometry.translate(LAKE.x, WATER_LEVEL, LAKE.z);
+  lake.renderOrder = 2;
+  lake.receiveShadow = true;
+  return [mk(HARBOR_X + 6, RIVER.x1, RIVER.z - w, RIVER.z + w), mk(WORLD.x0, HARBOR_X + 6, WORLD.z0, WORLD.z1), lake];
 }

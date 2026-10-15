@@ -379,6 +379,25 @@ export class GameAudio {
     }
   }
 
+  private lastBoom = 0;
+
+  /** Exploding barrel. `k` 0..1 = how close it was. Chain reactions get quieter follow-ups. */
+  explosion(k: number) {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const s = now - this.lastBoom < 0.15 ? k * 0.45 : k;
+    this.lastBoom = now;
+    this.tone('sine', 85, 22, 0.9 * s, 1.3);
+    this.tone('triangle', 60, 28, 0.4 * s, 0.9);
+    const f = this.lowpass(2400);
+    const { t } = this.burst(f, 0.95 * s, 0.004, 1.8);
+    f.frequency.setValueAtTime(2400, t);
+    f.frequency.exponentialRampToValueAtTime(180, t + 1.5);
+    this.burst(this.bandpass(3500, 0.8), 0.35 * s, 0.002, 0.25);
+    // Crackle and bits raining down afterwards
+    for (let i = 0; i < 6; i++) this.burst(this.bandpass(1200 + Math.random() * 2500, 3), 0.12 * s, 0.002, 0.05, 0.2 + Math.random() * 0.9);
+  }
+
   glass(k = 0.6) {
     if (!this.ctx) return;
     this.burst(this.bandpass(5000, 1), 0.25 + 0.3 * k, 0.002, 0.25);
