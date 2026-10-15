@@ -57,7 +57,31 @@ describe('damage math', () => {
   it('dents get deeper with harder hits but are capped', () => {
     expect(dentDepth(5)).toBeGreaterThan(dentDepth(2));
     expect(dentDepth(30)).toBeGreaterThan(dentDepth(5));
-    expect(dentDepth(500)).toBeLessThanOrEqual(1.1);
+    expect(dentDepth(500)).toBeLessThanOrEqual(1.5);
     expect(dentDepth(34)).toBeGreaterThan(0.8); // ~70 mph into a wall crushes the front
+  });
+});
+
+describe('tearing', () => {
+  it('only crushed metal tears, harder hits tear more, and the hole stays put', async () => {
+    const THREE = await import('three');
+    const { dentGeometry, tearGeometry } = await import('../src/damage/Deformer');
+    const make = () => {
+      const g = new THREE.PlaneGeometry(2, 2, 20, 20);
+      return { g, orig: (g.attributes.position.array as Float32Array).slice() };
+    };
+    const at = new THREE.Vector3(0, 0, 0), into = new THREE.Vector3(0, 0, -1);
+    // A light dent doesn't tear.
+    const a = make();
+    dentGeometry(a.g, a.orig, at, into, 0.1, 0.8, 1.5);
+    expect(tearGeometry(a.g, a.orig, at, 0.8, 0.9).torn).toBe(0);
+    // A deep crush does, more with a bigger hit.
+    const b = make(), c = make();
+    for (const m of [b, c]) dentGeometry(m.g, m.orig, at, into, 1.2, 0.9, 1.5);
+    const small = tearGeometry(b.g, b.orig, at, 0.8, 0.2).torn, big = tearGeometry(c.g, c.orig, at, 0.8, 0.8).torn;
+    expect(small).toBeGreaterThan(0);
+    expect(big).toBeGreaterThan(small);
+    // Tearing again with the same strength tears nothing new.
+    expect(tearGeometry(c.g, c.orig, at, 0.8, 0.8).torn).toBe(0);
   });
 });

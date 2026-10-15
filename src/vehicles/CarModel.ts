@@ -22,8 +22,10 @@ export interface CarPart {
   radius: number;
   /** What it sounds like when it falls off / gets hit. */
   sound: 'metal' | 'glass' | 'plastic';
-  /** Hinged parts (the hood) swing open on this pivot when crumpled. */
+  /** Hinged parts (hood, doors) swing open on this pivot when crumpled. */
   pivot?: THREE.Group;
+  /** How the hinged part swings: hood up at the front, door out sideways, scissor door up. */
+  swing?: 'hood' | 'door' | 'up';
   popped: boolean;
   /** Head/tail lights go dark when smashed. */
   light: boolean;
@@ -36,6 +38,8 @@ export interface CarModel {
   /** Wheel pivots (positioned each frame from the suspension). The first child spins around local x. */
   wheels: THREE.Group[];
   steeringWheel: THREE.Object3D;
+  /** Instrument needles (rotate about their local z) — speedometer and rev counter. */
+  gauges?: { speed: THREE.Object3D; rpm: THREE.Object3D };
   /** Where engine smoke comes out (car local). */
   smokePoint: THREE.Vector3;
   /** Outside views show solid tinted windows instead of see-through glass (cockpit view stays clear). */
@@ -45,7 +49,7 @@ export interface CarModel {
 /** Parts hidden while driving from the cockpit so the roof doesn't block the view. */
 export const COCKPIT_HIDDEN = new Set(['roof', 'pillars']);
 
-let shared: (Record<Finish, THREE.Material> & { glassCracked: THREE.Material; glassTinted: THREE.Material }) | null = null;
+let shared: (Record<Finish, THREE.Material> & { glassCracked: THREE.Material; glassCrackedTinted: THREE.Material; glassTinted: THREE.Material }) | null = null;
 
 /** Shared car materials (PBR, so paint and chrome pick up reflections from the sky). */
 export function carMaterials() {
@@ -71,9 +75,15 @@ export function carMaterials() {
         // Solid dark tint for outside views: reads as windows without showing the cabin.
         color: 0x1a232c, metalness: 0.1, roughness: 0.06, side: THREE.DoubleSide, envMapIntensity: 1.3,
       }),
+      // Cracked glass: still see-through (or still tinted), with bright crack lines.
+      // See-through between the cracks (light frosting), bright crack lines.
       glassCracked: new THREE.MeshStandardMaterial({
-        color: 0xe8f0f4, map: crackTexture(), metalness: 0, roughness: 0.3, transparent: true, opacity: 0.88,
-        side: THREE.DoubleSide, depthWrite: false,
+        color: 0xe4ecf2, map: crackTexture(true), emissive: 0xffffff, emissiveMap: crackTexture(false), emissiveIntensity: 0.35,
+        metalness: 0, roughness: 0.2, transparent: true, side: THREE.DoubleSide, depthWrite: false,
+      }),
+      glassCrackedTinted: new THREE.MeshStandardMaterial({
+        color: 0x1a232c, emissive: 0xffffff, emissiveMap: crackTexture(false), emissiveIntensity: 0.45,
+        metalness: 0.1, roughness: 0.15, side: THREE.DoubleSide, envMapIntensity: 1.0,
       }),
     };
   }
@@ -88,12 +98,13 @@ export class ModelBuilder {
   readonly parts: CarPart[] = [];
   readonly wheels: THREE.Group[] = [];
   steeringWheel: THREE.Object3D = new THREE.Object3D();
+  gauges?: { speed: THREE.Object3D; rpm: THREE.Object3D };
 
   part(
     name: string,
     kind: PartKind,
     geo: THREE.BufferGeometry,
-    opts: { detachable?: boolean; finish?: Finish; sound?: CarPart['sound']; hinge?: [number, number, number] } = {},
+    opts: { detachable?: boolean; finish?: Finish; sound?: CarPart['sound']; hinge?: [number, number, number]; swing?: CarPart['swing'] } = {},
   ) {
     const finish = opts.finish ?? DEFAULT_FINISH[kind];
     const mesh = new THREE.Mesh(geo, carMaterials()[finish]);
@@ -122,6 +133,7 @@ export class ModelBuilder {
       radius: bs.radius,
       sound: opts.sound ?? (kind === 'glass' ? 'glass' : finish === 'plastic' || finish === 'satin' ? 'plastic' : 'metal'),
       pivot,
+      swing: opts.hinge ? opts.swing ?? 'hood' : undefined,
       popped: false,
       light: finish === 'headlight' || finish === 'taillight',
     };
@@ -153,9 +165,62 @@ export class ModelBuilder {
     return g;
   }
 
+  /**
+   * Split the one-piece 'glass' part into separate windows — windshield, back glass,
+   * and side windows divided at the pillars (`cuts`, z positions) — so a hit only
+   * cracks or smashes the windows near it.
+   */
+  splitGlass(cuts: number[]) {
+    const i = this.parts.findIndex((p) => p.name === 'glass');
+    if (i < 0) return;
+    const old = this.parts[i];
+    const geo = old.mesh.geometry;
+    const pos = geo.attributes.position, index = geo.index!;
+    const groups = new Map<string, number[]>();
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+    for (let t = 0; t < index.count; t += 3) {
+      const [ia, ib, ic] = [index.getX(t), index.getX(t + 1), index.getX(t + 2)];
+      a.fromBufferAttribute(pos, ia);
+      b.fromBufferAttribute(pos, ib);
+      c.fromBufferAttribute(pos, ic);
+      n.subVectors(b, a).cross(c.clone().sub(a)).normalize();
+      const cz = (a.z + b.z + c.z) / 3;
+      // By the way each bit of glass mostly faces (corner strips go with the sides or top).
+      const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+      let key: string;
+      if (az > ax && az > ay) key = cz > 0 ? 'front' : 'back';
+      else if (ax >= ay) key = `${(a.x + b.x + c.x) / 3 > 0 ? 'l' : 'r'}${cuts.filter((z) => cz < z).length}`;
+      else key = 'top';
+      let g = groups.get(key);
+      if (!g) groups.set(key, (g = []));
+      g.push(ia, ib, ic);
+    }
+    old.mesh.removeFromParent();
+    this.parts.splice(i, 1);
+    for (const [key, idx] of groups) {
+      // Own compact geometry, so each window's bounds are its own.
+      const sub = geo.clone();
+      sub.setIndex(idx);
+      const compact = sub.toNonIndexed();
+      sub.dispose();
+      compact.computeVertexNormals();
+      // Flat UVs across each window (about 1.2 m per crack pattern) so cracks show properly.
+      const cp = compact.attributes.position;
+      const uv = new Float32Array(cp.count * 2);
+      for (let k = 0; k < cp.count; k++) {
+        const [x, y, z] = [cp.getX(k), cp.getY(k), cp.getZ(k)];
+        const [u, v] = key === 'front' || key === 'back' ? [x, y] : key === 'top' ? [x, z] : [z, y];
+        uv.set([u / 1.2, v / 1.2], k * 2);
+      }
+      compact.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      this.part(`glass-${key}`, 'glass', compact);
+    }
+    geo.dispose();
+  }
+
   build(smokePoint: THREE.Vector3, opts: { tintedGlass?: boolean } = {}): CarModel {
     // Tinted windows are the default look (car picker, chase view); the cockpit view clears them.
     if (opts.tintedGlass) for (const p of this.parts) if (p.kind === 'glass') p.mesh.material = carMaterials().glassTinted;
-    return { root: this.root, parts: this.parts, wheels: this.wheels, steeringWheel: this.steeringWheel, smokePoint, ...opts };
+    return { root: this.root, parts: this.parts, wheels: this.wheels, steeringWheel: this.steeringWheel, gauges: this.gauges, smokePoint, ...opts };
   }
 }

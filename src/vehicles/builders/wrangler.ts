@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ModelBuilder, CarModel } from '../CarModel';
 import { SPECS } from '../VehicleSpec';
 import { arcPoints, blob, cyl, keyframes, merge, patch, rbox, sculpt, torus, tube } from './geo';
-import { engineBay, interior, wheelPieces } from './common';
+import { engineBay, interior, underbody, wheelPieces } from './common';
 
 const RED = 0xc4122f;
 const BLACK = 0x1c1d1f;
@@ -48,7 +48,7 @@ export function buildWrangler(): CarModel {
       rbox({ at: [side * 0.885, 1.05, 0.3], size: [0.03, 0.035, 0.14], radius: 0.012, color: BLACK }),
       blob([side * 1.0, 1.3, 0.53], [0.04, 0.09, 0.12], BLACK),
       rbox({ at: [side * 0.92, 1.22, 0.53], size: [0.12, 0.12, 0.03], radius: 0.01, color: BLACK }),
-    ]), { detachable: true });
+    ]), { detachable: true, hinge: [side * 0.88, 0.92, 0.59], swing: 'door' });
   }
   m.part('tailgate', 'panel', patch(shell, gate, 0.012, RED), { detachable: true });
 
@@ -101,5 +101,6 @@ export function buildWrangler(): CarModel {
   for (const [x, z] of [[s.track / 2, az], [-s.track / 2, az], [s.track / 2, -az], [-s.track / 2, -az]])
     m.wheel([x, R, z], pieces, x < 0);
 
+  underbody(m, { wheelbase: s.wheelbase, track: s.track, wheelRadius: R, frameY: 0.6, railX: 0.42, z0: -2.05, z1: 2.05, ladder: true, engineZ: 1.27 });
   return m.build(new THREE.Vector3(0, 1.25, 1.45));
 }

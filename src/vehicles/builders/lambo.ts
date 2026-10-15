@@ -3,8 +3,8 @@
 import * as THREE from 'three';
 import { ModelBuilder, CarModel } from '../CarModel';
 import { SPECS } from '../VehicleSpec';
-import { blob, cyl, keyframes, merge, patch, rbox, sculpt } from './geo';
-import { engineBay, interior, wheelPieces } from './common';
+import { blob, cyl, keyframes, merge, patch, rbox, sculpt, tube } from './geo';
+import { engineBay, interior, openCabin, underbody, wheelPieces } from './common';
 
 const GREEN = 0x6fd418;
 const CARBON = 0x18191b;
@@ -48,7 +48,7 @@ export function buildLambo(): CarModel {
       patch(shell, (x, y, z) => x * side > 0 && door(x, y, z), 0.01, GREEN),
       blob([side * 1.08, 0.82, 0.7], [0.05, 0.06, 0.12], GREEN),
       rbox({ at: [side * 1.0, 0.8, 0.68], size: [0.12, 0.03, 0.05], radius: 0.01, color: CARBON }),
-    ]), { detachable: true });
+    ]), { detachable: true, hinge: [side * 1.0, 0.55, 0.95], swing: 'up' }); // scissor doors pop upwards
   }
 
   const canopy = sculpt({
@@ -65,6 +65,16 @@ export function buildLambo(): CarModel {
   });
   m.part('glass', 'glass', canopy);
   m.part('roof', 'panel', patch(canopy, (x, y, z) => y > 1.06 && z > -0.8 && z < 0.2 && Math.abs(x) < 0.6, 0.008, GREEN));
+  // Body-coloured pillars framing the glass: A-pillars up the windshield edges, rails
+  // along the roof, sloping C-pillars down the back, and the frame behind the door
+  // window. (Hidden in the cockpit view, like the Bronco's, so they don't block it.)
+  const pillars: THREE.BufferGeometry[] = [];
+  for (const sx of [1, -1]) {
+    pillars.push(tube([[sx * 0.85, 0.72, 1.02], [sx * 0.72, 0.95, 0.62], [sx * 0.62, 1.1, 0.2], [sx * 0.6, 1.14, -0.3], [sx * 0.62, 1.12, -0.75], [sx * 0.7, 1.0, -1.2], [sx * 0.84, 0.89, -1.72]], 0.035, GREEN, 40, 8));
+    pillars.push(tube([[sx * 0.86, 0.84, -0.45], [sx * 0.74, 1.0, -0.47], [sx * 0.62, 1.12, -0.5]], 0.03, GREEN, 8, 6));
+    pillars.push(tube([[sx * 0.88, 0.8, 0.95], [sx * 0.9, 0.84, 0.2], [sx * 0.88, 0.86, -0.6], [sx * 0.86, 0.88, -1.4]], 0.025, CARBON, 20, 6));
+  }
+  m.part('pillars', 'trim', merge(pillars), { finish: 'paint' });
   // Engine-cover louvres
   m.part('louvres', 'trim', merge(
     [-1.15, -1.3, -1.45, -1.6].map((z) => rbox({ at: [0, 0.915 - (z + 1.15) * 0.05, z], size: [0.8, 0.012, 0.05], radius: 0.005, color: CARBON })),
@@ -101,11 +111,14 @@ export function buildLambo(): CarModel {
     rbox({ at: [-0.4, 0.93, -2.18], size: [0.03, 0.1, 0.12], radius: 0.01, color: CARBON }),
   ]), { detachable: true, finish: 'satin', sound: 'plastic' });
 
-  interior(m, { dashY: 0.66, seatY: 0.32, eye: s.eye, width: 0.78, rearSeats: false, color: 0x1a1a1c, seatColor: 0x222225 });
+  interior(m, { dashY: 0.66, seatY: 0.32, eye: s.eye, width: 0.78, rearSeats: false, color: 0x1a1a1c, seatColor: 0x222225, seatBack: 0.75 });
 
   const pieces = wheelPieces({ radius: s.wheelRadius, width: s.wheelWidth, rimFrac: 0.74, spokes: 10, rimColor: 0x3a3c40, rimFinish: 'chrome', caliper: 0xf2c200, tread: 'road' });
   for (const [x, z] of [[s.track / 2, az], [-s.track / 2, az], [s.track / 2, -az], [-s.track / 2, -az]])
     m.wheel([x, s.wheelRadius, z], pieces, x < 0);
 
-  return m.build(new THREE.Vector3(0, 0.95, -1.6));
+  m.splitGlass([-0.45]);
+  openCabin(m, { z0: -1.15, z1: 0.98, xMax: 0.82, yMin: 0.6 });
+  underbody(m, { wheelbase: s.wheelbase, track: s.track, wheelRadius: s.wheelRadius, frameY: 0.2, railX: 0.55, z0: -2.25, z1: 2.15, ladder: false, engineZ: -1.3 });
+  return m.build(new THREE.Vector3(0, 0.95, -1.6), { tintedGlass: true });
 }

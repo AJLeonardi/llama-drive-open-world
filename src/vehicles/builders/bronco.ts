@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ModelBuilder, CarModel } from '../CarModel';
 import { SPECS } from '../VehicleSpec';
 import { arcPoints, blob, cyl, keyframes, merge, patch, rbox, sculpt, torus, tube } from './geo';
-import { engineBay, interior, wheelPieces } from './common';
+import { engineBay, interior, openCabin, underbody, wheelPieces } from './common';
 
 const WHITE = 0xf3f3f1;
 const BLACK = 0x1d1e20;
@@ -51,11 +51,11 @@ export function buildBronco(): CarModel {
       patch(shell, (x, y, z) => x * side > 0 && doorFront(x, y, z), 0.01, WHITE),
       rbox({ at: [side * 0.985, 1.12, 0.62], size: [0.03, 0.035, 0.16], radius: 0.012, color: BLACK }),
       mirror(side),
-    ]), { detachable: true });
+    ]), { detachable: true, hinge: [side * 0.97, 0.95, 0.92], swing: 'door' });
     m.part(`door-r${tag}`, 'panel', merge([
       patch(shell, (x, y, z) => x * side > 0 && doorRear(x, y, z), 0.01, WHITE),
       rbox({ at: [side * 0.985, 1.12, -0.3], size: [0.03, 0.035, 0.16], radius: 0.012, color: BLACK }),
-    ]), { detachable: true });
+    ]), { detachable: true, hinge: [side * 0.97, 0.95, -0.02], swing: 'door' });
   }
 
   // Glass greenhouse (windshield, side and rear windows).
@@ -128,6 +128,9 @@ export function buildBronco(): CarModel {
   for (const [x, z] of [[s.track / 2, az], [-s.track / 2, az], [s.track / 2, -az], [-s.track / 2, -az]])
     m.wheel([x, s.wheelRadius, z], pieces, x < 0);
 
+  m.splitGlass([-1.0, -0.02]); // rear quarter | rear door | front door
+  openCabin(m, { z0: -2.2, z1: 0.96, xMax: 0.86, yMin: 1.0 });
+  underbody(m, { wheelbase: s.wheelbase, track: s.track, wheelRadius: s.wheelRadius, frameY: 0.56, railX: 0.45, z0: -2.25, z1: 2.25, ladder: true, engineZ: 1.62 });
   return m.build(new THREE.Vector3(0, 1.3, 1.9), { tintedGlass: true });
 }
 

@@ -5,7 +5,7 @@ import {
   MAX_CRUSH, MAX_HEALTH, PART_LIMITS, applyDamage, carDamage, damageStage, dentDepth, dentRadius,
   handicapFor, impactDeltaV, misfireChancePerSecond,
 } from '../damage/Damage';
-import { dentGeometry, scuffGeometry } from '../damage/Deformer';
+import { dentGeometry, scuffGeometry, tearGeometry } from '../damage/Deformer';
 import type { Debris } from '../fx/Debris';
 import type { Particles } from '../fx/Particles';
 import { COCKPIT_HIDDEN, CarModel, CarPart, carMaterials } from './CarModel';
@@ -14,6 +14,8 @@ import { Gearbox } from './Gearbox';
 import { DriveInput, VehicleSim, WorldQueries } from './VehicleSim';
 import { CarId, SPECS, VehicleSpec } from './VehicleSpec';
 
+/** Hits harder than this (velocity change, m/s; ~27 mph) can tear crushed bodywork open. */
+const TEAR_DV = 12;
 const m4 = new THREE.Matrix4();
 const inv = new THREE.Matrix4();
 const pLocal = new THREE.Vector3();
@@ -45,6 +47,10 @@ export class Vehicle {
   /** Set during the step a misfire starts (audio plays a backfire). */
   misfiredThisStep = false;
   private time = 0;
+  /** How much the front and back have been shortened by head-on hits (m). */
+  private crushed = { front: 0, back: 0 };
+  /** Car-local z of the very front and back (for crumple zones). */
+  private extent = { front: 2, back: -2 };
 
   // Interpolation between fixed physics steps.
   private prevPos = new THREE.Vector3();
@@ -57,6 +63,8 @@ export class Vehicle {
     this.sim = new VehicleSim(physics, this.spec, x, y, z, heading);
     this.model = buildCar(id);
     this.gearbox = new Gearbox(this.spec.engine, this.spec.topSpeed);
+    const box = new THREE.Box3().setFromObject(this.model.root);
+    this.extent = { front: box.max.z, back: box.min.z };
     for (const p of this.model.parts) {
       p.mesh.geometry.computeBoundingBox();
     }
@@ -116,11 +124,26 @@ export class Vehicle {
       w.children[0].rotation.x = ctrl.wheelRotation(i) ?? 0;
     }
     this.model.steeringWheel.rotation.z = -this.sim.steerAngle * 6;
+    // Gauge needles sweep from bottom-left (0) clockwise to bottom-right (full scale).
+    const g = this.model.gauges;
+    if (g) {
+      const sweep = (f: number) => (135 - 270 * Math.min(1, Math.max(0, f))) * (Math.PI / 180);
+      g.speed.rotation.z = sweep(Math.abs(this.sim.speed) * 2.237 / 160);
+      g.rpm.rotation.z = sweep(this.gearbox.rpm / 8000);
+    }
+    // Unlatched doors flap with the car's movement.
+    const flap = Math.min(1, Math.abs(this.sim.speed) / 12);
     for (const p of this.model.parts) {
       if (!p.pivot || !p.popped || p.detached) continue;
       const t = p.pivot.userData.target as number;
-      p.pivot.rotation.x += (t - p.pivot.rotation.x) * 0.25;
-      p.pivot.rotation.z += ((p.pivot.userData.twist as number) - p.pivot.rotation.z) * 0.25;
+      if (p.swing === 'door') {
+        const wobble = Math.sin(this.time * 7 + p.center.z * 3) * 0.14 * flap;
+        p.pivot.rotation.y += (t + wobble - p.pivot.rotation.y) * 0.2;
+      } else {
+        const wobble = p.swing === 'up' ? Math.sin(this.time * 6) * 0.08 * flap : 0;
+        p.pivot.rotation.x += (t + wobble - p.pivot.rotation.x) * 0.25;
+        p.pivot.rotation.z += ((p.pivot.userData.twist as number) - p.pivot.rotation.z) * 0.25;
+      }
     }
   }
 
@@ -173,13 +196,33 @@ export class Vehicle {
           geo.computeBoundingBox();
         }
       }
-      // A crumpled hood buckles and pops open on its hinge, showing the engine.
-      if (part.pivot && !part.popped && frontHit && part.damage > 5 && !part.detached) {
-        part.popped = true;
-        part.pivot.userData.target = -(0.3 + Math.min(0.6, dv * 0.02) + Math.random() * 0.15);
-        part.pivot.userData.twist = (Math.random() - 0.5) * 0.25;
+      // A crumpled hood buckles and pops open on its hinge, showing the engine; a battered
+      // door comes unlatched and swings open (it flaps about as you drive, until a harder
+      // hit tears it off).
+      if (part.pivot && !part.popped && !part.detached) {
+        if (part.swing === 'hood' && frontHit && part.damage > 5) {
+          part.popped = true;
+          part.pivot.userData.target = -(0.3 + Math.min(0.6, dv * 0.02) + Math.random() * 0.15);
+          part.pivot.userData.twist = (Math.random() - 0.5) * 0.25;
+        } else if (part.swing !== 'hood' && part.damage > PART_LIMITS.detach * 0.45) {
+          part.popped = true;
+          const side = part.center.x > 0 ? 1 : -1;
+          part.pivot.userData.target = part.swing === 'door' ? -side * (0.45 + Math.random() * 0.6) : 0.6 + Math.random() * 0.4;
+          part.pivot.userData.twist = 0;
+        }
+      }
+      // Really hard hits rip holes in crushed bodywork, throwing out bits of sheet metal.
+      if ((part.kind === 'body' || part.kind === 'panel') && dv > TEAR_DV) {
+        const t = tearGeometry(geo, part.original, partPoint, radius * 0.8, Math.min(0.85, (dv - TEAR_DV) / 18));
+        if (t.torn > 0) this.shards(part, t.center, Math.min(5, 1 + Math.floor(t.torn / 8)), vel, debris);
       }
       this.updatePartState(part, particles, debris, vel, result);
+    }
+
+    // Head-on hits shorten the front (or back) of the car: a crumple zone.
+    if (dv > 7 && Math.abs(dLocal.z) > 0.65) {
+      const end = pLocal.z > 0 ? 1 : -1;
+      if (dLocal.z * end < 0) this.crumple(end, (dv - 6) * 0.032);
     }
 
     // Wheels near the hit get bent.
@@ -208,7 +251,8 @@ export class Vehicle {
     if (part.kind === 'glass') {
       if (!part.cracked && part.damage > PART_LIMITS.glassCrack) {
         part.cracked = true;
-        part.mesh.material = carMaterials().glassCracked;
+        // (In the cockpit view setCockpitView swaps this for the see-through cracked glass.)
+        part.mesh.material = this.model.tintedGlass ? carMaterials().glassCrackedTinted : carMaterials().glassCracked;
         result.glassBroke = true;
       }
       if (part.damage > PART_LIMITS.glassShatter && part.mesh.visible) {
@@ -221,11 +265,97 @@ export class Vehicle {
       }
       return;
     }
-    if (part.detachable && part.damage > PART_LIMITS.detach * (part.pivot ? 2.5 : 1)) {
+    // Hinged parts hang on longer: a hood stays (open) through a lot, a door swings
+    // open first and only tears off with more punishment.
+    const toughness = part.swing === 'hood' ? 2.5 : part.swing ? 1.7 : 1;
+    if (part.detachable && part.damage > PART_LIMITS.detach * toughness) {
       part.detached = true;
       result.partsLost.push(part.name);
       this.model.root.updateMatrixWorld(true);
       debris.release(part.mesh, vel, 4, true, part.sound === 'plastic' ? 'plastic' : 'metal');
+    }
+  }
+
+  /**
+   * Crumple zone: shorten the front (end = 1) or back (-1) of the car by `amount` more
+   * metres (up to a limit). Everything in the last ~1.3 m moves back — the very end
+   * most — and the squashed metal bunches into folds. Works in car space for every
+   * part (bumpers, lights, grille, hood, engine, frame), however they're hinged.
+   */
+  private crumple(end: 1 | -1, amount: number) {
+    const key = end > 0 ? 'front' : 'back';
+    const prev = this.crushed[key];
+    const next = Math.min(0.85, prev + amount);
+    const d = next - prev;
+    if (d < 0.01) return;
+    this.crushed[key] = next;
+    const zEnd = end > 0 ? this.extent.front : this.extent.back;
+    const L = 1.3;
+    const root = this.model.root;
+    root.updateMatrixWorld(true);
+    const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+    const toCar = new THREE.Matrix4(), toPart = new THREE.Matrix4();
+    const v = new THREE.Vector3();
+    for (const part of this.model.parts) {
+      if (part.detached || part.kind === 'interior' || part.kind === 'glass') continue;
+      toCar.multiplyMatrices(rootInv, part.mesh.matrixWorld);
+      toPart.copy(toCar).invert();
+      const geo = part.mesh.geometry;
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      let moved = false;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(toCar);
+        const t = (v.z * end - (zEnd * end - L)) / L;
+        if (t <= 0) continue;
+        const k = Math.min(1, t);
+        v.z -= end * d * k ** 1.3;
+        // Bunched-up folds: the squashed metal buckles up and out a little.
+        const w = Math.sin(k * Math.PI * 5 + v.x * 4) * d * 0.13 * (1 - k * 0.3);
+        v.y += w;
+        v.x += Math.sign(v.x) * Math.abs(w) * 0.6;
+        v.applyMatrix4(toPart);
+        pos.setXYZ(i, v.x, v.y, v.z);
+        moved = true;
+      }
+      if (moved) {
+        pos.needsUpdate = true;
+        geo.computeVertexNormals();
+        geo.computeBoundingBox();
+        geo.computeBoundingSphere();
+      }
+    }
+  }
+
+  /** Bits of torn sheet metal flying off, in the part's paint colour. */
+  private shards(part: CarPart, at: THREE.Vector3, n: number, vel: THREE.Vector3Like, debris: Debris) {
+    const col = part.mesh.geometry.attributes.color as THREE.BufferAttribute | undefined;
+    const c = new THREE.Color(col ? col.getX(0) : 0.8, col ? col.getY(0) : 0.8, col ? col.getZ(0) : 0.8);
+    // Prefer the colour of the metal right where it tore.
+    if (col) {
+      const pos = part.mesh.geometry.attributes.position;
+      let best = Infinity;
+      for (let i = 0; i < pos.count; i += 7) {
+        const d = (pos.getX(i) - at.x) ** 2 + (pos.getY(i) - at.y) ** 2 + (pos.getZ(i) - at.z) ** 2;
+        if (d < best) (best = d), c.setRGB(col.getX(i), col.getY(i), col.getZ(i));
+      }
+    }
+    part.mesh.updateWorldMatrix(true, false);
+    const world = at.clone().applyMatrix4(part.mesh.matrixWorld);
+    for (let i = 0; i < n; i++) {
+      const w = 0.2 + Math.random() * 0.35, h = 0.15 + Math.random() * 0.3;
+      const g = new THREE.PlaneGeometry(w, h, 2, 2);
+      // A little bent, like torn sheet metal.
+      const p = g.attributes.position;
+      for (let k = 0; k < p.count; k++) p.setZ(k, (Math.random() - 0.5) * 0.06 + p.getX(k) * p.getY(k) * 0.6);
+      g.computeVertexNormals();
+      const cols = new Float32Array(p.count * 3);
+      for (let k = 0; k < p.count; k++) cols.set([c.r, c.g, c.b], k * 3);
+      g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      const mesh = new THREE.Mesh(g, carMaterials().paint);
+      mesh.position.copy(world).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, Math.random() * 0.4, (Math.random() - 0.5) * 0.6));
+      mesh.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      this.model.root.parent?.add(mesh);
+      debris.release(mesh, vel, 5, true, 'metal', 150);
     }
   }
 
@@ -234,7 +364,10 @@ export class Vehicle {
     const mats = carMaterials();
     for (const p of this.model.parts) {
       if (COCKPIT_HIDDEN.has(p.name) && !p.detached) p.mesh.visible = !on;
-      if (this.model.tintedGlass && p.kind === 'glass' && !p.cracked) p.mesh.material = on ? mats.glass : mats.glassTinted;
+      // Tinted from outside; see-through from the driver's seat (cracked or not).
+      if (this.model.tintedGlass && p.kind === 'glass' && !p.detached) {
+        p.mesh.material = p.cracked ? (on ? mats.glassCracked : mats.glassCrackedTinted) : on ? mats.glass : mats.glassTinted;
+      }
     }
   }
 

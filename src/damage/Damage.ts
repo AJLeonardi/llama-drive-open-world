@@ -39,11 +39,11 @@ export function objectDamage(impulse: number, carMass: number, toughness: number
 export const applyDamage = (health: number, damage: number) => Math.max(0, health - Math.max(0, damage));
 
 /** How far (m) a panel gets pushed in by a crash with this velocity change (big hits crush ~1 m). */
-export const dentDepth = (dv: number) => Math.min(1.1, 0.045 * Math.max(0, dv - 1.5));
+export const dentDepth = (dv: number) => Math.min(1.5, 0.05 * Math.max(0, dv - 1.5));
 /** How wide (m) the dent spreads. */
 export const dentRadius = (dv: number) => 0.55 + Math.min(1.7, 0.05 * dv);
 /** Most a single vertex can be pushed from its original spot, by part kind. */
-export const MAX_CRUSH = { body: 1.1, panel: 0.8 };
+export const MAX_CRUSH = { body: 1.5, panel: 1.0 };
 
 export type DamageStage = 0 | 1 | 2 | 3 | 4;
 /** 0 healthy, 1 >25% damaged, 2 >50%, 3 >75%, 4 wrecked */
@@ -71,7 +71,7 @@ export const misfireChancePerSecond = (health: number) => (damageStage(health) =
 /** Per-part thresholds (accumulated local damage) for visible part failures. */
 export const PART_LIMITS = {
   glassCrack: 4,
-  glassShatter: 16,
+  glassShatter: 22,
   detach: 14,
   wheelWobble: 20,
 };
