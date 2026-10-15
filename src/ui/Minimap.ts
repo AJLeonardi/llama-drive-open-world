@@ -3,6 +3,8 @@
 import {
   ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR_X, LAKE, LOOP, MOUNTAIN, NYC, RIVER, Road, TRACK, WORLD,
 } from '../world/layout';
+import { findRoute } from '../world/route';
+import type { Vec2 } from '../util/math';
 
 const S = 0.5; // map pixels per metre
 const VIEW_METRES = 560; // width of world shown in the mini-map
@@ -100,15 +102,41 @@ function arrow(g: CanvasRenderingContext2D, x: number, y: number, size: number, 
   g.restore();
 }
 
+/** Pins closer than this to the car count as "you're there". */
+const ARRIVED = 25;
+
+/** Stroke a route (world points) as a bold blue line with a dark edge, `w` = line width. */
+function routeLine(g: CanvasRenderingContext2D, pts: Vec2[], toX: (x: number) => number, toZ: (z: number) => number, w: number) {
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+  g.beginPath();
+  pts.forEach(([x, z], i) => (i ? g.lineTo(toX(x), toZ(z)) : g.moveTo(toX(x), toZ(z))));
+  g.strokeStyle = '#0b3d91';
+  g.lineWidth = w * 1.6;
+  g.stroke();
+  g.strokeStyle = '#38a3ff';
+  g.lineWidth = w;
+  g.stroke();
+}
+
 export class Minimap {
   private world = drawWorld();
   private mini: HTMLCanvasElement;
   private big: HTMLCanvasElement;
   private overlay: HTMLElement;
+  private hint: HTMLElement;
+  private clearBtn: HTMLElement;
   private frame = 0;
   isOpen = false;
+  /** Where the player wants to go (picked on the big map), and the way there by road. */
+  private dest: Vec2 | null = null;
+  private route: Vec2[] | null = null;
+  private routeAge = 0;
+  /** Car pose when the big map was drawn (for redrawing after a tap). */
+  private bigCar = { x: 0, z: 0, fx: 0, fz: 1 };
+  private bigScale = 1;
 
-  constructor(root: HTMLElement, private readonly onToggle: (open: boolean) => void) {
+  constructor(root: HTMLElement, private readonly onToggle: (open: boolean) => void, private readonly onArrive: () => void = () => {}) {
     const wrap = document.createElement('div');
     wrap.className = 'minimap interactive';
     this.mini = document.createElement('canvas');
@@ -119,18 +147,61 @@ export class Minimap {
       this.open(true);
     });
 
+    // Big map: tap it to drop a pin (tap again to move it); Go! (or tapping outside) closes it.
     this.overlay = document.createElement('div');
     this.overlay.className = 'bigmap';
     this.big = document.createElement('canvas');
-    const hint = document.createElement('div');
-    hint.className = 'bigmap-hint';
-    hint.textContent = 'Tap anywhere to keep driving';
-    this.overlay.append(this.big, hint);
+    const side = document.createElement('div');
+    side.className = 'bigmap-side';
+    this.hint = document.createElement('div');
+    this.hint.className = 'bigmap-hint';
+    const go = document.createElement('button');
+    go.className = 'big';
+    go.textContent = '🚗 Go!';
+    this.clearBtn = document.createElement('button');
+    this.clearBtn.className = 'big gray';
+    this.clearBtn.textContent = '✖ Clear';
+    side.append(this.hint, go, this.clearBtn);
+    this.overlay.append(this.big, side);
     root.appendChild(this.overlay);
     this.overlay.addEventListener('click', (e) => {
       e.stopPropagation();
       this.open(false);
     });
+    side.addEventListener('click', (e) => e.stopPropagation());
+    go.addEventListener('click', () => this.open(false));
+    this.clearBtn.addEventListener('click', () => {
+      this.setDest(null);
+      this.redrawBig();
+    });
+    this.big.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const s = S * this.bigScale;
+      let wx = WORLD.x0 + e.offsetX / s, wz = WORLD.z0 + e.offsetY / s;
+      // A tap on (or right next to) a place's icon goes to that place.
+      const snap = Math.max(30, 26 / s);
+      for (const d of DESTINATIONS) if (Math.hypot(d.x - wx, d.z - wz) < snap) (wx = d.x), (wz = d.z);
+      this.setDest([wx, wz]);
+      this.redrawBig();
+    });
+    this.updateHint();
+  }
+
+  private setDest(d: Vec2 | null) {
+    this.dest = d;
+    this.route = d ? findRoute(this.bigCar.x, this.bigCar.z, d[0], d[1]) : null;
+    this.routeAge = 0;
+    this.updateHint();
+  }
+
+  private updateHint() {
+    this.hint.textContent = this.dest ? '📍 Tap the map again to move the pin' : '📍 Tap the map to pick where to go';
+    this.clearBtn.style.display = this.dest ? '' : 'none';
+  }
+
+  private redrawBig() {
+    const c = this.bigCar;
+    this.drawBig(c.x, c.z, c.fx, c.fz);
   }
 
   open(on: boolean) {
@@ -141,7 +212,17 @@ export class Minimap {
   }
 
   /** Mini-map: centred on the car, rotated so straight ahead is up. */
-  update(x: number, z: number, fx: number, fz: number) {
+  update(x: number, z: number, fx: number, fz: number, dt = 1 / 60) {
+    // Directions: re-plan now and then (so a wrong turn gets a new way), and stop on arrival.
+    if (this.dest) {
+      if (Math.hypot(this.dest[0] - x, this.dest[1] - z) < ARRIVED) {
+        this.setDest(null);
+        this.onArrive();
+      } else if ((this.routeAge += dt) > 0.6) {
+        this.routeAge = 0;
+        this.route = findRoute(x, z, this.dest[0], this.dest[1]);
+      }
+    }
     if (this.isOpen || this.frame++ % 2) return;
     const cssSize = this.mini.clientWidth;
     if (!cssSize) return;
@@ -165,6 +246,11 @@ export class Minimap {
     g.translate(-(x - WORLD.x0) * S, -(z - WORLD.z0) * S);
     g.imageSmoothingEnabled = true;
     g.drawImage(this.world, 0, 0);
+    if (this.route) {
+      // From the car itself, then along the planned way.
+      const pts: Vec2[] = [[x, z], ...this.route.slice(1)];
+      routeLine(g, pts, (wx) => (wx - WORLD.x0) * S, (wz) => (wz - WORLD.z0) * S, (size * 0.045) / k);
+    }
     g.restore();
 
     // Destinations: on the map if close, otherwise pinned to the rim pointing the way.
@@ -175,7 +261,8 @@ export class Minimap {
     };
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    for (const d of DESTINATIONS) {
+    const marks = this.dest ? [...DESTINATIONS, { x: this.dest[0], z: this.dest[1], icon: '📍', label: '' }] : DESTINATIONS;
+    for (const d of marks) {
       const [sx, sy] = toScreen(d.x, d.z);
       const vx = sx - r, vy = sy - r, dist = Math.hypot(vx, vy);
       const iconSize = size * 0.13;
@@ -207,9 +294,13 @@ export class Minimap {
 
   /** Full world map (north up) with labels; drawn when opened. */
   drawBig(x: number, z: number, fx: number, fz: number) {
+    this.bigCar = { x, z, fx, fz };
+    if (this.dest && !this.route) this.route = findRoute(x, z, this.dest[0], this.dest[1]);
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const cw = window.innerWidth * 0.94, ch = window.innerHeight * 0.8;
+    // Leave room beside the map (landscape) for the hint and buttons.
+    const cw = window.innerWidth * 0.94 - Math.min(300, window.innerWidth * 0.3), ch = window.innerHeight * 0.9;
     const scale = Math.min(cw / this.world.width, ch / this.world.height);
+    this.bigScale = scale;
     const w = this.world.width * scale, h = this.world.height * scale;
     this.big.style.width = `${w}px`;
     this.big.style.height = `${h}px`;
@@ -219,6 +310,7 @@ export class Minimap {
     g.scale(dpr, dpr);
     g.drawImage(this.world, 0, 0, w, h);
     const X = (wx: number) => (wx - WORLD.x0) * S * scale, Z = (wz: number) => (wz - WORLD.z0) * S * scale;
+    if (this.route) routeLine(g, this.route, X, Z, Math.max(3, h * 0.012));
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     for (const d of DESTINATIONS) {
@@ -228,13 +320,23 @@ export class Minimap {
       g.lineWidth = 4;
       g.strokeStyle = 'rgba(0,0,0,0.65)';
       g.fillStyle = '#ffffff';
-      g.strokeText(d.label, X(d.x), Z(d.z) + Math.max(20, h * 0.065));
-      g.fillText(d.label, X(d.x), Z(d.z) + Math.max(20, h * 0.065));
+      // Keep labels inside the map (Thunder Mountain is near the edge).
+      const half = g.measureText(d.label).width / 2 + 4;
+      const lx = Math.min(w - half, Math.max(half, X(d.x)));
+      g.strokeText(d.label, lx, Z(d.z) + Math.max(20, h * 0.065));
+      g.fillText(d.label, lx, Z(d.z) + Math.max(20, h * 0.065));
     }
     g.font = `bold ${Math.max(13, h * 0.035)}px -apple-system, Helvetica, sans-serif`;
     g.fillStyle = '#ffffff';
     g.strokeText('YOU', X(x), Z(z) - Math.max(22, h * 0.06));
     g.fillText('YOU', X(x), Z(z) - Math.max(22, h * 0.06));
     arrow(g, X(x), Z(z), Math.max(12, h * 0.04), Math.atan2(fx, -fz), '#1e88ff');
+    if (this.dest) {
+      // Pin with its point on the spot.
+      g.font = `${Math.max(26, h * 0.075)}px sans-serif`;
+      g.textBaseline = 'bottom';
+      g.fillText('📍', X(this.dest[0]), Z(this.dest[1]) + Math.max(3, h * 0.008));
+      g.textBaseline = 'middle';
+    }
   }
 }

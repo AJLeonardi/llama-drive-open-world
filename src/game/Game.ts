@@ -131,7 +131,7 @@ export class Game {
       }
       this.audio.suspend(open);
       this.last = performance.now();
-    });
+    }, () => this.audio.chime());
 
     this.controls.onKey = (k) => {
       if (k === 'c' && this.state === 'drive') this.cameras.next();
@@ -378,7 +378,7 @@ export class Game {
     this.debris.update();
     this.underwater.update(dt);
     const f = sim.forward();
-    this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z);
+    this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z, dt);
     this.hud.setSpeed(sim.speed);
     this.hud.setHealth(car.health);
     this.hud.setBoost(sim.boostTimer > 1.6);

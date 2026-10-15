@@ -337,7 +337,12 @@ h2 {
 }
 .bigmap.on { display: flex; }
 .bigmap canvas { border-radius: 16px; border: 3px solid rgba(255, 255, 255, 0.85); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5); }
-.bigmap-hint { font-size: max(16px, calc(var(--u) * 3.5)); font-weight: 800; opacity: 0.9; }
+.bigmap-hint { font-size: max(16px, calc(var(--u) * 3.5)); font-weight: 800; opacity: 0.9; text-align: center; max-width: 260px; }
+.bigmap-side { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.bigmap-side .big { min-width: 0; width: 100%; margin: 4px 0; }
+/* Landscape: buttons beside the map, so the map can be as tall as the screen allows. */
+@media (orientation: landscape) { .bigmap { flex-direction: row; gap: 3vw; } .bigmap-side { width: min(280px, 28vw); } }
+@media (max-height: 500px) { .bigmap-hint { font-size: 15px; } .bigmap-side .big { padding: 10px 14px; font-size: 18px; } }
 
 /* Short landscape screens (phones): compact cards so nothing gets squashed. */
 @media (max-height: 500px) {
