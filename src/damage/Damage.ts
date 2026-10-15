@@ -57,16 +57,13 @@ export function damageStage(health: number): DamageStage {
 }
 
 /**
- * How damage hurts driving. `pullSide` is -1/+1 toward the most damaged side.
- * Misfires (engineCut) are rolled by the caller using `misfireChancePerSecond`.
+ * How damage affects driving: not at all until the car is wrecked, then it won't go.
+ * (Slowing a battered car down just made it harder to get around and crash more; the
+ * damage shows in dents, smoke, lost parts and backfires instead.)
  */
-export function handicapFor(health: number, pullSide: number): Handicap {
-  const stage = damageStage(health);
-  const power = [1, 0.85, 0.72, 0.45, 0][stage];
-  const topSpeed = [1, 0.9, 0.8, 0.62, 0][stage];
-  const dmg = MAX_HEALTH - health;
-  const steerPull = dmg > 50 ? pullSide * 0.05 * Math.min(1, (dmg - 50) / 50) : 0;
-  return { power, topSpeed, steerPull, engineCut: stage === 4 };
+export function handicapFor(health: number): Handicap {
+  const wrecked = damageStage(health) === 4;
+  return { power: wrecked ? 0 : 1, topSpeed: wrecked ? 0 : 1, steerPull: 0, engineCut: wrecked };
 }
 
 export const misfireChancePerSecond = (health: number) => (damageStage(health) === 3 ? 0.35 : 0);

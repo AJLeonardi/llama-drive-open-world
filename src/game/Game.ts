@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { FIXED_DT, Physics, initPhysics } from '../physics/Physics';
 import { Impact, ImpactTracker } from '../physics/Impacts';
 import { World } from '../world/World';
-import { SPAWN, WATER_LEVEL, isDeepWater } from '../world/layout';
+import { SPAWN, WATER_LEVEL, isDeepWater, waterDepth } from '../world/layout';
 import { Vehicle } from '../vehicles/Vehicle';
 import { CarId } from '../vehicles/VehicleSpec';
 import { NO_INPUT } from '../vehicles/VehicleSim';
@@ -60,6 +60,10 @@ export class Game {
   private upsideTimer = 0;
   private smokeAcc = 0;
   private titleAngle = 0;
+  /** Where a mid-game respawn puts the car (updated while driving). */
+  private safeSpot: { x: number; y: number; z: number; heading: number } | null = null;
+  private safeTimer = 0;
+  private selectHere = false;
   private lastBlast = 0;
   private pixelRatio: number;
   private maxPixelRatio: number;
@@ -100,10 +104,11 @@ export class Game {
 
     this.hud = new Hud({
       play: () => this.onPlay(),
-      pickCar: (id) => this.startDrive(id),
+      pickCar: (id) => this.startDrive(id, this.selectHere),
       openMenu: () => this.pause(true),
       resume: () => this.pause(false),
-      newCar: () => this.showSelect(),
+      newCar: () => this.showSelect(true),
+      fixHere: () => this.startDrive(this.carId, true),
       startOver: () => this.startDrive(this.carId),
       toggleSound: () => {
         this.audio.setMuted(!this.audio.muted);
@@ -190,24 +195,36 @@ export class Game {
     this.showSelect();
   }
 
-  private showSelect() {
+  /** Car picker. `here`: mid-game, so the new car appears where the old one was. */
+  private showSelect(here = false) {
+    this.selectHere = here;
     this.audio.suspend(false);
     this.audio.stopEngine();
     this.state = 'select';
     this.hud.show('select');
   }
 
-  /** Fresh start: the whole world resets, new car at the spawn point. */
-  private startDrive(id: CarId) {
+  /**
+   * New car. By default a fresh start: the whole world resets and the car appears at the
+   * spawn point. With `here`, the world stays as it is and the car appears at the last
+   * safe spot the old one drove over (on its wheels, out of the water).
+   */
+  private startDrive(id: CarId, here = false) {
     this.audio.unlock();
     this.audio.suspend(false);
     this.carId = id;
     this.car?.dispose();
-    this.debris.clear();
-    this.buildingDamage.clear();
-    this.world.reset({ x: SPAWN.x, y: 0, z: SPAWN.z });
+    const spot = here ? this.safeSpot : null;
+    if (!spot) {
+      this.debris.clear();
+      this.buildingDamage.clear();
+      this.world.reset({ x: SPAWN.x, y: 0, z: SPAWN.z });
+    }
+    const at = spot ?? { x: SPAWN.x, y: 0, z: SPAWN.z, heading: SPAWN.heading };
+    this.safeSpot = { ...at };
     this.endUnderwater();
-    this.car = new Vehicle(this.physics, this.scene, id, SPAWN.x, 0.4, SPAWN.z, SPAWN.heading);
+    this.car = new Vehicle(this.physics, this.scene, id, at.x, at.y + 0.4, at.z, at.heading);
+    if (spot) this.world.props.stream(at);
     if (this.tracker) this.tracker.setCar(this.car.sim.collider);
     else this.tracker = new ImpactTracker(this.physics, this.car.sim.collider);
     this.audio.setCar(this.car.spec.engine);
@@ -240,6 +257,8 @@ export class Game {
     this.audio.stopEngine();
     this.audio.splash();
     this.hud.show('underwater');
+    // The underwater camera circles outside the car: show its roof and outside windows.
+    this.car!.setCockpitView(false);
     const p = this.car!.model.root.position;
     this.underwater.start(tmpV.set(p.x, Math.max(p.y, WATER_LEVEL - 4), p.z));
     this.car!.sim.body.setLinearDamping(2.5);
@@ -469,11 +488,18 @@ export class Game {
         this.startSinking();
         return false;
       } else if (p.y < -60) {
-        this.startDrive(this.carId); // fell out of the world somehow
+        this.startDrive(this.carId, true); // fell out of the world somehow
         return true;
       }
-      // Stuck on its roof or side → offer the flip button.
+      // Remember where the car is on its wheels on dry land, for respawning here.
       const up = car.sim.up();
+      this.safeTimer -= dt;
+      if (this.safeTimer <= 0 && car.sim.wheelsInContact >= 3 && up.y > 0.85 && waterDepth(p.x, p.z) === 0) {
+        this.safeTimer = 0.5;
+        const f = car.sim.forward();
+        this.safeSpot = { x: p.x, y: p.y, z: p.z, heading: Math.atan2(f.x, f.z) };
+      }
+      // Stuck on its roof or side → offer the flip button.
       if ((up.y < 0.45 || car.sim.isUpsideDown()) && Math.abs(car.sim.speed) < 2) this.upsideTimer += dt;
       else this.upsideTimer = 0;
       this.hud.setFlip(this.upsideTimer > 1.5);
@@ -486,8 +512,9 @@ export class Game {
       this.stateTimer += dt;
       if (this.stateTimer > SINK_SECONDS) {
         // Wrecked + sank → pick a new car; otherwise jump straight back in the same one.
-        if (car.wrecked) this.showSelect();
-        else this.startDrive(this.carId);
+        // Either way it's back on dry land where the car last was.
+        if (car.wrecked) this.showSelect(true);
+        else this.startDrive(this.carId, true);
         return true;
       }
     }

@@ -47,11 +47,11 @@ describe('damage math', () => {
     expect(damageStage(45)).toBe(2);
     expect(damageStage(20)).toBe(3);
     expect(damageStage(0)).toBe(4);
-    const healthy = handicapFor(100, 1), hurt = handicapFor(40, 1), wrecked = handicapFor(0, 1);
-    expect(hurt.power).toBeLessThan(healthy.power);
-    expect(hurt.topSpeed).toBeLessThan(healthy.topSpeed);
-    expect(Math.abs(hurt.steerPull)).toBeGreaterThan(0);
+    // A battered car still drives at full speed; only a wrecked one stops.
+    const healthy = handicapFor(100), hurt = handicapFor(5), wrecked = handicapFor(0);
+    expect(hurt).toEqual(healthy);
     expect(wrecked.engineCut).toBe(true);
+    expect(wrecked.power).toBe(0);
   });
 
   it('dents get deeper with harder hits but are capped', () => {

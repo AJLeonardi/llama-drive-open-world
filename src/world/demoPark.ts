@@ -5,7 +5,7 @@ import { StaticBatch } from './batch';
 import { box } from '../vehicles/builders/geo';
 import { textPanel, twoSidedSign } from './landmarks';
 import { ramp } from './dirtTrack';
-import type { PropSpawn } from './propModels';
+import { PropSpawn, tntPyramid } from './propModels';
 import type { ParkedSpawn } from './streetLife';
 
 const BARREL_COLORS = [0xd22f27, 0x2a6fd6, 0xf2b705, 0x2ea44f];
@@ -99,6 +99,13 @@ export function buildDemoPark(batch: StaticBatch, physics: Physics, scene: THREE
     const x = X(560 + i * 2.6);
     props.push({ kind: 'domino', x, y: 0, z: Z(622 - Math.sin(i * 0.25) * 6), rot: Math.cos(i * 0.25) * 0.25 });
   }
+
+  // Exploding barrels: pyramids, a big one by the dominoes, and a "minefield" row.
+  tntPyramid(props, X(560), Z(395), 4, 0);
+  tntPyramid(props, X(470), Z(500), 3, Math.PI / 2);
+  tntPyramid(props, X(700), Z(598), 5, 0);
+  tntPyramid(props, X(690), Z(530), 3, 0);
+  for (let i = 0; i < 9; i++) props.push({ kind: 'tnt', x: X(590 + i * 12), y: 0, z: Z(505 + (i % 2) * 6), rot: 0 });
 
   // Junk car lot along the east side (light — they crumple and go flying)
   for (let i = 0; i < 7; i++)

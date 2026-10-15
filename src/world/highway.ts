@@ -78,12 +78,45 @@ export function buildHighway(batch: StaticBatch, physics: Physics, scene: THREE.
 
   // Construction zone on the park road: a line of cones down the middle.
   for (const [a, b] of roadSegments(PARK_ROAD).slice(14, 24)) props.push({ kind: 'cone', x: (a[0] + b[0]) / 2, y: 0, z: (a[1] + b[1]) / 2, rot: 0 });
-  // A pile of crates by the track road, and a barrel wall on the highway shoulder.
+  // Things to smash on the highway between the cities. Westbound lanes are z -2..-14,
+  // eastbound z 2..14 (the gantries are at x = ±135, the exits split off near x = ±25..100).
+  const crates = (x: number, z: number, base: number, alongZ = true) => {
+    for (let row = 0; row < base; row++)
+      for (let i = 0; i < base - row; i++) {
+        const o = (i - (base - row - 1) / 2) * 1.05;
+        props.push({ kind: 'crate', x: alongZ ? x : x + o, y: row * 1.0, z: alongZ ? z + o : z, rot: 0 });
+      }
+  };
+  // Crate pyramids right in the lanes.
+  crates(40, -8, 4);
+  crates(-70, 8, 4);
+  crates(115, 8, 3);
+  crates(-115, -8, 3);
+  // A wall of crates across both westbound lanes…
+  for (let row = 0; row < 2; row++) for (let i = 0; i < 10; i++) props.push({ kind: 'crate', x: -10, y: row * 1.0, z: -3 - i * 1.05, rot: 0 });
+  // …and a wall of barrels across the eastbound ones.
+  for (let row = 0; row < 2; row++)
+    for (let i = 0; i < 16; i++) props.push({ kind: 'barrel', x: 75, y: row * 0.9, z: 2.8 + i * 0.68 + (row % 2) * 0.34, rot: 0, color: [0xd22f27, 0x2a6fd6, 0xf2b705][(i + row) % 3] });
+  // Cone slalom down the westbound lane line, and on the eastbound side too.
+  for (let x = 130; x > 60; x -= 7) props.push({ kind: 'cone', x, y: 0, z: -7.5 + (Math.round(x / 7) % 2) * 1.2, rot: 0 });
+  for (let x = -130; x < -85; x += 7) props.push({ kind: 'cone', x, y: 0, z: 7.5 - (Math.round(x / 7) % 2) * 1.2, rot: 0 });
+  // Barrels and barriers on the shoulders.
+  for (let i = 0; i < 6; i++) props.push({ kind: 'barrel', x: 60, y: 0, z: -13 + i * 0.7, rot: 0, color: 0xf2b705 });
+  for (const x of [-40, -20, 0]) props.push({ kind: 'barrier', x, y: 0, z: 13.2, rot: Math.PI / 2 });
+  // Giant dominoes along the north shoulder.
+  for (let i = 0; i < 14; i++) props.push({ kind: 'domino', x: -95 + i * 2.6, y: 0, z: -12.5, rot: 0 });
+  // Exploding barrels on both shoulders.
+  tntPyramid(props, -45, -12.5, 3, 0);
+  tntPyramid(props, 100, 12.5, 4, 0);
+
+  // On the exit roads: crate stacks to plough through.
+  for (const [road, at] of [[TRACK_ROAD, 0.55], [TRACK_ROAD, 0.8], [PARK_ROAD, 0.5], [PARK_ROAD, 0.75]] as const) {
+    const [a, b] = roadSegments(road)[Math.floor(at * (road.pts.length - 2))];
+    const ux = b[0] - a[0], uz = b[1] - a[1];
+    crates((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 3, Math.abs(ux) > Math.abs(uz));
+  }
   for (let row = 0; row < 3; row++)
     for (let i = 0; i < 3 - row; i++) props.push({ kind: 'crate', x: -80 + i * 1.05 + row * 0.52, y: row * 1.0, z: -300, rot: 0 });
-  for (let i = 0; i < 6; i++) props.push({ kind: 'barrel', x: 60, y: 0, z: -13 + i * 0.7, rot: 0, color: 0xf2b705 });
-  // Exploding barrels, stacked up, right by the highway.
-  tntPyramid(props, -20, 24, 4, 0);
 
   // Countryside trees on the hills.
   for (let i = 0; i < 380; i++) {

@@ -154,6 +154,8 @@ export class ModelBuilder {
   }
 
   build(smokePoint: THREE.Vector3, opts: { tintedGlass?: boolean } = {}): CarModel {
+    // Tinted windows are the default look (car picker, chase view); the cockpit view clears them.
+    if (opts.tintedGlass) for (const p of this.parts) if (p.kind === 'glass') p.mesh.material = carMaterials().glassTinted;
     return { root: this.root, parts: this.parts, wheels: this.wheels, steeringWheel: this.steeringWheel, smokePoint, ...opts };
   }
 }

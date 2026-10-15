@@ -40,7 +40,6 @@ export class Vehicle {
   readonly gearbox: Gearbox;
   health = MAX_HEALTH;
   /** Accumulated hits on the left (+x) and right (-x) sides; steering pulls toward the worse side. */
-  private sideHits = { left: 0, right: 0 };
   private wheelDamage = [0, 0, 0, 0];
   private misfire = 0;
   /** Set during the step a misfire starts (audio plays a backfire). */
@@ -83,12 +82,8 @@ export class Vehicle {
       this.misfire = 0.3;
       this.misfiredThisStep = true;
     }
-    const pull = this.sideHits.left > this.sideHits.right ? 1 : -1;
-    const hc = handicapFor(this.health, pull);
-    if (this.misfire > 0) hc.engineCut = true;
-    // Wobbly front wheels make the steering twitch a bit.
-    const wobble = Math.max(this.wheelDamage[0], this.wheelDamage[1]) > PART_LIMITS.wheelWobble ? Math.sin(this.time * 9) * 0.04 : 0;
-    hc.steerPull += wobble;
+    // Misfires are just for show (a backfire bang); damage never slows the car down.
+    const hc = handicapFor(this.health);
     this.sim.update(dt, input, hc, q);
     this.gearbox.update(dt, this.sim.speed, hc.engineCut ? 0 : input.throttle);
   }
@@ -145,8 +140,6 @@ export class Vehicle {
     qTmp.copy(this.currQuat).invert();
     dLocal.set(-impact.normal.x, -impact.normal.y, -impact.normal.z).applyQuaternion(qTmp).normalize();
 
-    if (pLocal.x > 0.2) this.sideHits.left += dv;
-    else if (pLocal.x < -0.2) this.sideHits.right += dv;
 
     const depth = dentDepth(dv);
     const radius = dentRadius(dv);

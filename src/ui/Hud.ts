@@ -8,6 +8,8 @@ export interface HudCallbacks {
   openMenu(): void;
   resume(): void;
   newCar(): void;
+  /** Same kind of car, good as new, right where the wreck happened. */
+  fixHere(): void;
   startOver(): void;
   toggleSound(): boolean;
   nextCamera(): void;
@@ -132,7 +134,8 @@ export class Hud {
           <h2>💥 Your car is wrecked! 💥</h2>
           <div class="wreck-msg">That was a BIG crash!</div>
           <div class="menu-buttons">
-            <button class="big" data-act="newcar">🚙 Pick a new car</button>
+            <button class="big" data-act="fix">🔧 Fix it &amp; keep going</button>
+            <button class="big orange" data-act="newcar">🚙 Pick a new car</button>
             <button class="big blue" data-act="peek">👀 Look at the damage</button>
           </div>
         </div>
@@ -140,6 +143,7 @@ export class Hud {
       </div>`);
     this.wreckPanel = wreck.querySelector('.wreck-panel')!;
     const peekBtn = wreck.querySelector('[data-act=newcar2]') as HTMLElement;
+    tap(wreck.querySelector('[data-act=fix]'), cb.fixHere);
     tap(wreck.querySelector('[data-act=newcar]'), cb.newCar);
     tap(peekBtn, cb.newCar);
     tap(wreck.querySelector('[data-act=peek]'), () => {
