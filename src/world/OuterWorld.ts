@@ -8,15 +8,19 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Physics, RAPIER } from '../physics/Physics';
 import { CHUNK, OUTER, TERRAIN_CELL, WORLD } from './bounds';
 import {
-  CROSSINGS, CURVES, CurveRoad, HIGHWAYS, HW, Highway, OUTER_LAKES, RAMPS, Solid, TOWERS, bridgeSolids, highwayCoords, outerLakeAt, outerRoadAt, profileAt,
+  CROSSINGS, CURVES, CurveRoad, HIGHWAYS, HW, Highway, OUTER_LAKES, PROFILE_STEP, RAMPS, Solid, TOWERS, besideHighway, bridgeSolids, forNearHighways, highwayCoords, outerLakeAt, outerRoadAt,
+  TOWN, nearestCurve, pointAt, profileAt, townCoords,
 } from './outer';
-import { heightAt } from './layout';
-import { desertWeight } from './biomes';
+import { heightAt, surfaceAt } from './layout';
+import type { Surface } from '../physics/surfaces';
+import { biomeAt, desertWeight, fieldEdgeDistance } from './biomes';
+import { TREE_KINDS, TRUNK_RADIUS, TreeKind, treeDepthMaterial, treeGeometry, treeMaterial } from './trees';
+import { townItems, townMaterials, townTreeSpots } from './townBuild';
 import { bushGeometry, bushMaterial } from './bushes';
 import { mulberry32, smoothstep } from '../util/math';
 import { heightfieldCollider, terrainPatch } from './terrain';
 import { ROAD_ORDER, normalizeAttributes } from './batch';
-import { box } from '../vehicles/builders/geo';
+import { box, cyl, paint } from '../vehicles/builders/geo';
 import { textPanel } from './landmarks';
 
 const N = CHUNK / TERRAIN_CELL; // cells per chunk side
@@ -41,6 +45,10 @@ interface Chunk {
   colliders: RAPIER.Collider[] | null;
   geos: Map<string, THREE.BufferGeometry[]>;
   textures: THREE.Texture[];
+  /** Tree meshes and how many trees each has (fewer are drawn far away). */
+  trees: { mesh: THREE.InstancedMesh; full: number }[];
+  /** Spots kept clear of trees (farmyards): x, z, radius. */
+  clearings: [number, number, number][];
 }
 
 const chunkKey = (ix: number, iz: number) => `${ix},${iz}`;
@@ -107,6 +115,11 @@ export class OuterWorld {
   private readonly signGeo = new THREE.PlaneGeometry(7.5, 3.2);
 
   constructor(private readonly physics: Physics, private readonly materials: Record<string, THREE.Material>) {
+    Object.assign(materials, townMaterials());
+    // Paint the tree pictures and build the town now, while the game loads, rather than
+    // the first time one comes into view (that would be a stutter mid-drive).
+    for (const k of TREE_KINDS) treeMaterial(k), treeGeometry(k);
+    townItems(() => false);
     // Invisible walls round the edge of the map (the Ring and the mountains come first).
     const W = OUTER;
     for (const [cx, cz, hx, hz] of [
@@ -142,6 +155,9 @@ export class OuterWorld {
         continue;
       }
       c.group.visible = !c.job && dc < VIEW;
+      // Far away (and in the fog) a forest needs fewer trees to look like one.
+      const keep = dc < 260 ? 1 : dc < 500 ? 0.5 : 0.25;
+      for (const t of c.trees) t.mesh.count = Math.ceil(t.full * keep);
       if (dp < PHYSICS_ON) this.physicsOn(c);
       else if (dp > PHYSICS_OFF) this.physicsOff(c);
     }
@@ -167,7 +183,7 @@ export class OuterWorld {
     let c = this.chunks.get(key);
     if (!c) {
       const inner = x0 >= WORLD.x0 && x0 + CHUNK <= WORLD.x1 && z0 >= WORLD.z0 && z0 + CHUNK <= WORLD.z1;
-      c = { ix, iz, x0, z0, inner, job: null, group: new THREE.Group(), heights: null, solids: [], colliders: null, geos: new Map(), textures: [] };
+      c = { ix, iz, x0, z0, inner, job: null, group: new THREE.Group(), heights: null, solids: [], colliders: null, geos: new Map(), textures: [], trees: [], clearings: [] };
       c.job = this.build(c);
       c.group.visible = false;
       this.group.add(c.group);
@@ -216,19 +232,27 @@ export class OuterWorld {
     if (!c.inner) {
       const S = N + 3; // one extra sample all round, for slopes
       const h = new Float32Array(S * S);
+      const surf: Surface[] = new Array((N + 1) * (N + 1));
       for (let r = 0; r < S; r++) {
-        for (let k = 0; k < S; k++) h[r * S + k] = heightAt(x0 + (k - 1) * TERRAIN_CELL, z0 + (r - 1) * TERRAIN_CELL);
-        if (r % 4 === 3) yield;
+        for (let k = 0; k < S; k++) {
+          const x = x0 + (k - 1) * TERRAIN_CELL, z = z0 + (r - 1) * TERRAIN_CELL;
+          h[r * S + k] = heightAt(x, z);
+          if (r >= 1 && r <= N + 1 && k >= 1 && k <= N + 1) surf[(r - 1) * (N + 1) + (k - 1)] = surfaceAt(x, z);
+        }
+        if (r % 2 === 1) yield;
       }
       // (Chunks line up with WORLD's edges, so each one is wholly inside or outside it.)
       // The ground keeps its own mesh (its desert attribute doesn't survive merging).
-      const ground = terrainPatch(x0, z0, N, N, (k, r) => h[(r + 1) * S + (k + 1)], true);
+      const ground = terrainPatch(x0, z0, N, N, (k, r) => h[(r + 1) * S + (k + 1)], true, (k, r) => surf[r * (N + 1) + k]);
       ground.computeBoundingSphere();
       const gm = new THREE.Mesh(ground, this.materials['ground-outer']);
       gm.matrixAutoUpdate = false;
       gm.receiveShadow = true;
       c.group.add(gm);
       this.bushes(c, h, S);
+      yield;
+      this.farms(c, h, S);
+      this.trees(c, h, S);
       c.heights = new Float32Array((N + 1) * (N + 1));
       for (let r = 0; r <= N; r++) for (let k = 0; k <= N; k++) c.heights[r * (N + 1) + k] = h[(r + 1) * S + (k + 1)];
       const heights = c.heights;
@@ -253,6 +277,15 @@ export class OuterWorld {
         c.group.add(m);
       }
     for (const r of RAMPS) this.exitSigns(c, r, inChunk);
+    this.townSigns(c, inChunk);
+    // The town: its pieces that stand in this chunk.
+    if (TOWN && Math.hypot(TOWN.x - (x0 + CHUNK / 2), TOWN.z - (z0 + CHUNK / 2)) < CHUNK + 600)
+      for (const it of townItems(inChunk)) {
+        for (const [k, g] of it.geos) this.add(c, k, g);
+        for (const b of it.solids) c.solids.push(() => addSolid(this.physics, b));
+        for (const o of it.objects) c.group.add(o);
+        yield;
+      }
     yield;
     // --- merge everything per material
     for (const [key, geos] of c.geos) {
@@ -263,9 +296,10 @@ export class OuterWorld {
       const mesh = new THREE.Mesh(merged, key === 'glow' ? this.glow : this.materials[key]);
       mesh.matrixAutoUpdate = false;
       mesh.receiveShadow = true;
-      mesh.castShadow = key === 'plain';
+      mesh.castShadow = key === 'plain' || !!this.materials[key]?.userData.castShadow;
       if (key.startsWith('road')) mesh.renderOrder = ROAD_ORDER[key] ?? 1;
       c.group.add(mesh);
+      yield;
     }
     c.geos.clear();
   }
@@ -291,16 +325,16 @@ export class OuterWorld {
     const spots: [number, number][] = [];
     // Verges of the highways crossing this chunk.
     for (const hw of HIGHWAYS) {
-      const q0 = highwayCoords(hw, c.x0 + CHUNK / 2, c.z0 + CHUNK / 2);
-      if (Math.abs(q0.d) > CHUNK) continue;
-      for (let s = q0.s - CHUNK; s < q0.s + CHUNK; s += 6) {
-        if (s < 0 || s > hw.len) continue;
-        for (const side of [-1, 1]) {
-          if (rng() > 0.5) continue;
-          const d = side * (HW + 4 + rng() * rng() * 40);
-          spots.push([hw.ax + hw.ux * s - hw.uz * d, hw.az + hw.uz * s + hw.ux * d]);
-        }
-      }
+      if (hw.x1 < c.x0 - 60 || hw.x0 > c.x0 + CHUNK + 60 || hw.z1 < c.z0 - 60 || hw.z0 > c.z0 + CHUNK + 60) continue;
+      hw.pts.forEach(([px, pz], k) => {
+        if (px < c.x0 - 60 || px > c.x0 + CHUNK + 60 || pz < c.z0 - 60 || pz > c.z0 + CHUNK + 60) return;
+        for (let s = k * PROFILE_STEP; s < (k + 1) * PROFILE_STEP && s <= hw.len; s += 6)
+          for (const side of [-1, 1]) {
+            if (rng() > 0.5) continue;
+            const [bx, bz] = besideHighway(hw, s, side * (HW + 4 + rng() * rng() * 40));
+            spots.push([bx, bz]);
+          }
+      });
     }
     // And dotted about everywhere else.
     for (let i = 0; i < 90; i++) spots.push([c.x0 + rng() * CHUNK, c.z0 + rng() * CHUNK]);
@@ -322,27 +356,274 @@ export class OuterWorld {
     c.group.add(mesh);
   }
 
-  /** The part of a straight highway inside this chunk. */
+  /** Ground height and steepness at a spot in this chunk, from its height samples. */
+  private groundAt(c: Chunk, h: Float32Array, S: number, x: number, z: number) {
+    const fx = (x - c.x0) / TERRAIN_CELL + 1, fz = (z - c.z0) / TERRAIN_CELL + 1;
+    const k = Math.min(S - 2, Math.max(0, Math.floor(fx))), r = Math.min(S - 2, Math.max(0, Math.floor(fz)));
+    const u = fx - k, v = fz - r;
+    const at = (rr: number, kk: number) => h[rr * S + kk];
+    const y = (at(r, k) * (1 - u) + at(r, k + 1) * u) * (1 - v) + (at(r + 1, k) * (1 - u) + at(r + 1, k + 1) * u) * v;
+    const slope = Math.hypot(at(r, k + 1) - at(r, k), at(r + 1, k) - at(r, k)) / TERRAIN_CELL;
+    return { y, slope };
+  }
+
+  /**
+   * Trees: thick forest in the forest (red and gold in its autumn part), snowy pines on
+   * the lower mountain slopes, a few along the farm hedges, maples in town. They crowd
+   * the verges of the roads (that's what you see) and thin out further off. Never on a
+   * road, in water, on a cliff, in a farmyard or in the middle of town. Solid trunks.
+   */
+  private trees(c: Chunk, h: Float32Array, S: number) {
+    const rng = mulberry32(c.ix * 92821 + c.iz * 68917 + 11);
+    const mid = biomeAt(c.x0 + CHUNK / 2, c.z0 + CHUNK / 2);
+    const corners = [[0, 0], [CHUNK, 0], [0, CHUNK], [CHUNK, CHUNK]].map(([dx, dz]) => biomeAt(c.x0 + dx, c.z0 + dz));
+    const wooded = Math.max(...[mid, ...corners].map((b) => b.forest + b.mountain + b.farm * 0.2));
+    const nearTown = TOWN && Math.hypot(TOWN.x - (c.x0 + CHUNK / 2), TOWN.z - (c.z0 + CHUNK / 2)) < CHUNK + 600;
+    if (wooded < 0.05 && !nearTown) return;
+    const inChunk = (x: number, z: number) => x >= c.x0 && x < c.x0 + CHUNK && z >= c.z0 && z < c.z0 + CHUNK;
+    const roadFree = (x: number, z: number, m: number) => {
+      if (outerLakeAt(x, z) || nearestCurve(x, z).edge < m) return false;
+      let ok = true;
+      forNearHighways(x, z, (hw, s, d) => {
+        if (Math.abs(d) < HW + m && s > -m && s < hw.len + m) ok = false;
+      });
+      return ok;
+    };
+    const list = new Map<TreeKind, THREE.Matrix4[]>(TREE_KINDS.map((k) => [k, []]));
+    const colors = new Map<TreeKind, THREE.Color[]>(TREE_KINDS.map((k) => [k, []]));
+    const trunks: [number, number, number, number][] = [];
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    const plant = (x: number, z: number, kind: TreeKind, size: number) => {
+      const g = this.groundAt(c, h, S, x, z);
+      q.setFromAxisAngle(up, rng() * Math.PI * 2);
+      list.get(kind)!.push(m4.compose(new THREE.Vector3(x, g.y - 0.2, z), q, new THREE.Vector3(size, size * (0.85 + rng() * 0.3), size)).clone());
+      const tint = new THREE.Color(1, 1, 1).multiplyScalar(0.82 + rng() * 0.3);
+      if (kind === 'autumn') tint.offsetHSL((rng() - 0.5) * 0.06, 0, 0);
+      colors.get(kind)!.push(tint);
+      trunks.push([x, g.y, z, TRUNK_RADIUS[kind] * size]);
+    };
+    /** Try a tree at a spot: how likely depends on the region; `verge` spots are by a road. */
+    const tryAt = (x: number, z: number, verge: boolean) => {
+      if (!inChunk(x, z)) return;
+      const b = biomeAt(x, z);
+      const g = this.groundAt(c, h, S, x, z);
+      const hedge = b.farm > 0.3 && fieldEdgeDistance(x, z) < 2.5;
+      let p = b.forest * (verge ? 0.95 : 0.8) + b.mountain * (g.y < 260 ? 0.7 : 0.15) + (hedge ? b.farm * 0.5 : b.farm * 0.02);
+      if (g.slope > (b.mountain > 0.5 ? 0.85 : 0.6)) p = 0;
+      if (rng() > p) return;
+      const tc = townCoords(x, z);
+      if (tc && Math.abs(tc.a) < 300 && tc.b > 80 && tc.b < 385) return;
+      if (c.clearings.some(([cx, cz, r]) => Math.hypot(x - cx, z - cz) < r)) return;
+      if (TOWERS.some((t) => Math.abs(t.x - x) < 8 && Math.abs(t.z - z) < 8)) return;
+      if (!roadFree(x, z, 7)) return;
+      let kind: TreeKind;
+      if (b.mountain > 0.5) kind = 'pineSnow';
+      else if (b.forest > 0.4) kind = b.autumn > 0.5 ? (rng() < 0.72 ? 'autumn' : 'pine') : rng() < 0.55 ? 'pine' : 'broad';
+      else kind = b.desert > 0.4 ? 'broad' : rng() < 0.2 ? 'pine' : 'broad';
+      plant(x, z, kind, 0.75 + rng() * 0.6);
+    };
+    // Along the roads first (if the far trees get thinned, these stay).
+    const along = (pts: readonly (readonly [number, number])[], hw: number) => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+        if (Math.max(ax, bx) < c.x0 - 90 || Math.min(ax, bx) > c.x0 + CHUNK + 90 || Math.max(az, bz) < c.z0 - 90 || Math.min(az, bz) > c.z0 + CHUNK + 90) continue;
+        const len = Math.hypot(bx - ax, bz - az) || 1, nx = -(bz - az) / len, nz = (bx - ax) / len;
+        for (let k = 0; k < len / 6; k++) {
+          const t = rng();
+          const side = rng() < 0.5 ? -1 : 1, d = hw + 10 + rng() * rng() * 70;
+          tryAt(ax + (bx - ax) * t + nx * side * d, az + (bz - az) * t + nz * side * d, true);
+        }
+      }
+    };
+    for (const hw of HIGHWAYS) if (!(hw.x1 < c.x0 - 100 || hw.x0 > c.x0 + CHUNK + 100 || hw.z1 < c.z0 - 100 || hw.z0 > c.z0 + CHUNK + 100)) along(hw.pts, HW);
+    for (const r of CURVES) if (!(r.x1 < c.x0 - 100 || r.x0 > c.x0 + CHUNK + 100 || r.z1 < c.z0 - 100 || r.z0 > c.z0 + CHUNK + 100)) along(r.pts, r.hw);
+    // Then dotted about everywhere else.
+    for (let i = 0; i < 200 + 300 * Math.min(1, wooded); i++) tryAt(c.x0 + rng() * CHUNK, c.z0 + rng() * CHUNK, false);
+    // Maples in town.
+    if (nearTown) for (const [x, z] of townTreeSpots()) if (inChunk(x, z)) plant(x, z, 'autumn', 0.85 + rng() * 0.35);
+    for (const kind of TREE_KINDS) {
+      const mats = list.get(kind)!;
+      if (!mats.length) continue;
+      const mesh = new THREE.InstancedMesh(treeGeometry(kind), treeMaterial(kind), mats.length);
+      mats.forEach((m, i) => mesh.setMatrixAt(i, m));
+      colors.get(kind)!.forEach((col, i) => mesh.setColorAt(i, col));
+      mesh.computeBoundingSphere();
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.customDepthMaterial = treeDepthMaterial(kind);
+      c.group.add(mesh);
+      c.trees.push({ mesh, full: mats.length });
+    }
+    // Solid trunks (static: they cost almost nothing while the car isn't touching them).
+    for (const [x, y, z, r] of trunks)
+      c.solids.push(() => {
+        const col = this.physics.world.createCollider(RAPIER.ColliderDesc.cylinder(3, Math.max(0.25, r * 1.15)).setTranslation(x, y + 2.6, z).setFriction(0.6));
+        this.physics.setOwner(col, { kind: 'static', material: 'wood' });
+        return col;
+      });
+  }
+
+  /**
+   * Farmyards in farmland, set back from the highways: a red barn with a silo, a white
+   * farmhouse with a porch, and round hay bales in the field next to them.
+   */
+  private farms(c: Chunk, h: Float32Array, S: number) {
+    if (biomeAt(c.x0 + CHUNK / 2, c.z0 + CHUNK / 2).farm < 0.6) return;
+    const rng = mulberry32(c.ix * 7331 + c.iz * 3571 + 5);
+    const spots: [number, number, number][] = [];
+    for (const hw of HIGHWAYS) {
+      if (hw.x1 < c.x0 || hw.x0 > c.x0 + CHUNK || hw.z1 < c.z0 || hw.z0 > c.z0 + CHUNK) continue;
+      hw.pts.forEach(([px, pz], k) => {
+        if (k % 4 || px < c.x0 || px > c.x0 + CHUNK || pz < c.z0 || pz > c.z0 + CHUNK) return;
+        const side = rng() < 0.5 ? -1 : 1, d = side * (HW + 70 + rng() * 110);
+        const [x, z] = besideHighway(hw, k * PROFILE_STEP, d);
+        const u = pointAt(hw, k * PROFILE_STEP);
+        // Facing the highway.
+        spots.push([x, z, Math.atan2(-u.ux * side, -u.uz * side) + Math.PI / 2]);
+      });
+    }
+    if (!spots.length) for (let i = 0; i < 3; i++) spots.push([c.x0 + 80 + rng() * (CHUNK - 160), c.z0 + 80 + rng() * (CHUNK - 160), rng() * Math.PI * 2]);
+    let built = 0;
+    for (const [x, z, face] of spots.sort(() => rng() - 0.5)) {
+      if (built >= 2 || rng() < 0.35) continue;
+      if (x < c.x0 + 40 || x > c.x0 + CHUNK - 40 || z < c.z0 + 40 || z > c.z0 + CHUNK - 40) continue;
+      if (c.clearings.some(([cx, cz]) => Math.hypot(cx - x, cz - z) < 160)) continue;
+      // Flat, dry and clear of every road.
+      let lo = Infinity, hi = -Infinity, clear = true;
+      for (let dx = -30; dx <= 30 && clear; dx += 15)
+        for (let dz = -30; dz <= 30 && clear; dz += 15) {
+          const y = this.groundAt(c, h, S, x + dx, z + dz).y;
+          (lo = Math.min(lo, y)), (hi = Math.max(hi, y));
+          if (outerRoadAt(x + dx, z + dz) || outerLakeAt(x + dx, z + dz) || nearestCurve(x + dx, z + dz).edge < 15) clear = false;
+        }
+      if (!clear || hi - lo > 4) continue;
+      built++;
+      c.clearings.push([x, z, 48]);
+      this.farmyard(c, x, lo - 0.3, z, face, rng);
+    }
+  }
+
+  private farmyard(c: Chunk, x: number, y: number, z: number, face: number, rng: () => number) {
+    const cs = Math.cos(face), sn = Math.sin(face);
+    // Local (along, across) → world, local x along `face`.
+    const P = (a: number, b: number): [number, number] => [x + a * cs + b * sn, z - a * sn + b * cs];
+    const solid = (a: number, b: number, yy: number, sa: number, sy: number, sb: number, color: number, draw = true) => {
+      const [px, pz] = P(a, b);
+      const s: Solid = { at: [px, yy + sy / 2, pz], size: [sa, sy, sb], heading: face, kind: 'building', color };
+      if (draw) this.add(c, 'plain', box({ at: s.at, size: s.size, rot: [0, face, 0], color, seg: 100 }));
+      c.solids.push(() => addSolid(this.physics, s));
+    };
+    const deco = (a: number, b: number, yy: number, sa: number, sy: number, sb: number, color: number) => {
+      const [px, pz] = P(a, b);
+      this.add(c, 'plain', box({ at: [px, yy + sy / 2, pz], size: [sa, sy, sb], rot: [0, face, 0], color, seg: 100 }));
+    };
+    const roof = (a: number, b: number, yy: number, sa: number, sb: number, rh: number, color: number, ridgeAlongB: boolean) => {
+      // A pitched roof as a stretched, rotated triangular prism.
+      const g = new THREE.CylinderGeometry(1, 1, 1, 3, 1);
+      g.rotateZ(Math.PI / 2);
+      g.rotateX(Math.PI / 6 + Math.PI);
+      // Now a prism along x with its point up: scale to size.
+      g.scale(ridgeAlongB ? sb + 1 : sa + 1, rh / 1.5, (ridgeAlongB ? sa : sb) / 1.732 + 0.6);
+      g.translate(0, rh / 3, 0);
+      if (ridgeAlongB) g.rotateY(Math.PI / 2);
+      g.rotateY(face);
+      const [px, pz] = P(a, b);
+      g.translate(px, yy, pz);
+      this.add(c, 'plain', paint(g, color));
+    };
+    // Barn: red, white-trimmed doors, a dark roof and a hay-loft door in the gable.
+    solid(0, 0, y, 13, 7, 21, 0xa3302a);
+    roof(0, 0, y + 7, 13, 21, 5.5, 0x45403c, true);
+    for (const s of [-1, 1]) {
+      deco(0, s * 10.55, y, 5.2, 4.6, 0.12, 0xa3302a);
+      deco(0, s * 10.6, y + 4.4, 5.6, 0.25, 0.1, 0xffffff);
+      for (const e of [-2.6, 2.6]) deco(e, s * 10.6, y, 0.25, 4.6, 0.1, 0xffffff);
+      deco(0, s * 10.6, y + 2.3, 5.2, 0.22, 0.1, 0xffffff);
+      deco(0, s * 10.6, y + 7.6, 2.2, 2, 0.12, 0xffffff);
+    }
+    // Silo: tall and round, with a dome.
+    {
+      const [sx, sz] = P(10, -5);
+      this.add(c, 'plain', cyl({ at: [sx, y + 8, sz], radius: 3, length: 16, axis: 'y', segments: 16, color: 0xb7bfc4 }));
+      const dome = new THREE.SphereGeometry(3.05, 16, 6, 0, Math.PI * 2, 0, Math.PI / 2).translate(sx, y + 16, sz);
+      this.add(c, 'plain', paint(dome, 0x8c969c));
+      for (let k = 1; k < 8; k++) this.add(c, 'plain', cyl({ at: [sx, y + k * 2, sz], radius: 3.06, length: 0.15, axis: 'y', segments: 16, color: 0x8e979c }));
+      solid(10, -5, y, 5.6, 17, 5.6, 0, false);
+    }
+    // Farmhouse: white, a grey roof, a porch along the front.
+    solid(-6, -26, y, 10, 6.2, 12, 0xf0eee7);
+    roof(-6, -26, y + 6.2, 10, 12, 4, 0x4c5157, false);
+    for (const e of [-4.5, 0, 4.5]) deco(-6 + e, -26 + 7.2, y, 0.2, 3, 0.2, 0xffffff);
+    deco(-6, -26 + 7.2, y + 3, 10.4, 0.2, 2.6, 0x4c5157);
+    for (const [wa, wy] of [[-8.5, 1.4], [-3.5, 1.4], [-8.5, 4.2], [-3.5, 4.2]]) deco(wa, -26 + 6.05, y + wy, 1.1, 1.5, 0.1, 0x2b3540);
+    deco(-6, -26 + 6.05, y, 1.1, 2.3, 0.1, 0x5a2e22);
+    // Round hay bales in the field behind.
+    for (let i = 0; i < 7; i++) {
+      const a = 30 + rng() * 40, b = -20 + rng() * 40;
+      const [hx, hz] = P(a, b);
+      const g = new THREE.CylinderGeometry(0.85, 0.85, 1.3, 12);
+      g.rotateZ(Math.PI / 2);
+      g.rotateY(rng() * Math.PI);
+      g.translate(hx, y + 1.15, hz);
+      this.add(c, 'plain', paint(g, 0xd6b25e));
+      solid(a, b, y + 0.3, 1.5, 1.7, 1.5, 0, false);
+    }
+  }
+
+  /** Green signs on the highway before each end of the town road: EXIT, Mariano-ville. */
+  private townSigns(c: Chunk, inChunk: (x: number, z: number) => boolean) {
+    if (!TOWN) return;
+    const h = HIGHWAYS[TOWN.hw];
+    const r = TOWN.road;
+    for (const [end, dir] of [[0, 1], [r.pts.length - 1, -1]] as const) {
+      const sEnd = highwayCoords(h, r.pts[end][0], r.pts[end][1]).s;
+      for (const back of [80, 400]) {
+        const ss = sEnd - dir * back;
+        const [x, z] = besideHighway(h, ss, TOWN.side * (HW + 3));
+        if (!inChunk(x, z)) continue;
+        const u = pointAt(h, ss);
+        const tx = u.ux * dir, tz = u.uz * dir;
+        const rightX = -tz, rightZ = tx;
+        const arrow = (-u.uz * TOWN.side) * rightX + (u.ux * TOWN.side) * rightZ > 0 ? '↗' : '↖';
+        const lines = back > 200 ? ['Mariano-ville', 'NEXT EXIT'] : ['EXIT ' + arrow, 'Mariano-ville'];
+        const key = lines.join('|');
+        let tex = this.signTextures.get(key);
+        if (!tex) this.signTextures.set(key, (tex = textPanel(lines)));
+        const y = profileAt(h, ss);
+        const sign = new THREE.Mesh(this.signGeo, new THREE.MeshBasicMaterial({ map: tex }));
+        sign.position.set(x, y + 5.4, z);
+        sign.rotation.y = Math.atan2(-tx, -tz);
+        sign.updateMatrix();
+        sign.matrixAutoUpdate = false;
+        c.group.add(sign);
+        for (const o of [-2.8, 2.8]) this.add(c, 'plain', box({ at: [x + tz * o, y + 2, z - tx * o], size: [0.25, 4, 0.25], color: 0x7d8288 }));
+      }
+    }
+  }
+
+  /** The runs of a highway whose segments start inside this chunk (every 12.5 m). */
   private highwayRibbon(c: Chunk, h: Highway) {
-    // Clip the line to the chunk square.
-    let t0 = 0, t1 = h.len;
-    for (const [p, d, lo, hi] of [[h.ax, h.ux, c.x0, c.x0 + CHUNK], [h.az, h.uz, c.z0, c.z0 + CHUNK]]) {
-      if (Math.abs(d) < 1e-9) {
-        if (p < lo || p >= hi) return;
+    if (h.x1 < c.x0 - 50 || h.x0 > c.x0 + CHUNK + 50 || h.z1 < c.z0 - 50 || h.z0 > c.z0 + CHUNK + 50) return;
+    const inside = (p: readonly [number, number]) => p[0] >= c.x0 && p[0] < c.x0 + CHUNK && p[1] >= c.z0 && p[1] < c.z0 + CHUNK;
+    let run: { x: number; y: number; z: number }[] = [], s0 = 0;
+    const flush = () => {
+      if (run.length > 1) this.add(c, 'road-highway', ribbon(run, HW, s0 / V_REPEAT));
+      run = [];
+    };
+    const at = (s: number) => {
+      const p = pointAt(h, s);
+      return { x: p.x, y: profileAt(h, s) + ROAD_LIFT, z: p.z };
+    };
+    for (let k = 0; k < h.pts.length - 1; k++) {
+      if (!inside(h.pts[k])) {
+        flush();
         continue;
       }
-      const a = (lo - p) / d, b = (hi - p) / d;
-      t0 = Math.max(t0, Math.min(a, b));
-      t1 = Math.min(t1, Math.max(a, b));
+      const s = k * PROFILE_STEP, e = Math.min(h.len, s + PROFILE_STEP);
+      if (!run.length) (s0 = s), run.push(at(s));
+      run.push(at((s + e) / 2), at(e));
     }
-    if (t1 <= t0) return;
-    const pts: { x: number; y: number; z: number }[] = [];
-    const n = Math.max(1, Math.ceil((t1 - t0) / 12.5));
-    for (let i = 0; i <= n; i++) {
-      const s = t0 + ((t1 - t0) * i) / n;
-      pts.push({ x: h.ax + h.ux * s, y: profileAt(h, s) + ROAD_LIFT, z: h.az + h.uz * s });
-    }
-    this.add(c, 'road-highway', ribbon(pts, HW, t0 / V_REPEAT));
+    flush();
   }
 
   /** The runs of a curved road (ramp or Ring) whose segments start inside this chunk. */
@@ -354,7 +635,7 @@ export class OuterWorld {
     // Ramps taper in and out of the highways like real exit/entry lanes (no square ends).
     const taper = (i: number) => (r.kind === 'ramp' ? r.hw * (0.25 + 0.75 * smoothstep(0, 5, Math.min(i, n - 1 - i))) : r.hw);
     const flush = () => {
-      if (run.length > 1) this.add(c, r.kind === 'ramp' ? 'road-ramp' : 'road-highway', ribbon(run, r.hw, 0));
+      if (run.length > 1) this.add(c, r.kind === 'ramp' ? 'road-ramp' : r.kind === 'town' ? 'road-street' : 'road-highway', ribbon(run, r.hw, 0));
       run = [];
     };
     for (let i = 0; i < segs; i++) {
@@ -413,12 +694,13 @@ export class OuterWorld {
       const dir = Math.sign(sc - s); // direction of travel along the highway
       const ss = s - dir * 70;
       const side = Math.sign(d);
-      const x = h.ax + h.ux * ss - h.uz * side * (HW + 3), z = h.az + h.uz * ss + h.ux * side * (HW + 3);
+      const [x, z] = besideHighway(h, ss, side * (HW + 3));
       if (!inChunk(x, z)) continue;
-      const tx = h.ux * dir, tz = h.uz * dir;
+      const u = pointAt(h, ss);
+      const tx = u.ux * dir, tz = u.uz * dir;
       // Which way the exit goes from the driver's point of view.
       const rightX = -tz, rightZ = tx;
-      const arrow = (-h.uz * side) * rightX + (h.ux * side) * rightZ > 0 ? '↗' : '↖';
+      const arrow = (-u.uz * side) * rightX + (u.ux * side) * rightZ > 0 ? '↗' : '↖';
       const text = `EXIT ${arrow}|${other.name}`;
       let tex = this.signTextures.get(text);
       if (!tex) this.signTextures.set(text, (tex = textPanel(['EXIT ' + arrow, other.name])));
@@ -451,7 +733,8 @@ export class OuterWorld {
     this.physicsOff(c);
     c.group.traverse((o) => {
       if (o instanceof THREE.Mesh) {
-        if (o.geometry !== this.signGeo && o.geometry !== bushGeometry()) o.geometry.dispose();
+        if (o.geometry !== this.signGeo && !o.geometry.userData.shared) o.geometry.dispose();
+        if (o instanceof THREE.InstancedMesh) o.dispose();
         if (o.material instanceof THREE.MeshBasicMaterial && o.material !== this.glow && o.material.map) o.material.dispose();
       }
     });

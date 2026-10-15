@@ -4,17 +4,22 @@ import { HEALTHY, VehicleSim } from '../src/vehicles/VehicleSim';
 import { SPECS } from '../src/vehicles/VehicleSpec';
 import { CHUNK, TERRAIN_CELL } from '../src/world/bounds';
 import { heightAt, surfaceAt } from '../src/world/layout';
-import { CROSSINGS, HIGHWAYS, Highway, RAMPS, bridgeSolids, highwayCoords, profileAt } from '../src/world/outer';
+import { CROSSINGS, HIGHWAYS, Highway, RAMPS, TOWN, besideHighway, bridgeSolids, highwayCoords, pointAt, profileAt } from '../src/world/outer';
 import { heightfieldCollider } from '../src/world/terrain';
 import { addSolid } from '../src/world/OuterWorld';
 
 /** Physics for the real ground (chunk heightfields) and bridges round a crossing. */
 async function interchange(index: number) {
+  const cr = CROSSINGS[index];
+  return { physics: await groundAround(cr.x, cr.z), cr };
+}
+
+/** Physics for the real ground (chunk heightfields) and bridges within reach of a spot. */
+async function groundAround(cx: number, cz: number, r = 700) {
   await initPhysics();
   const physics = new Physics();
-  const cr = CROSSINGS[index];
+  const cr = { x: cx, z: cz };
   const N = CHUNK / TERRAIN_CELL;
-  const r = 700;
   for (let ix = Math.floor((cr.x - r) / CHUNK); ix <= Math.floor((cr.x + r) / CHUNK); ix++)
     for (let iz = Math.floor((cr.z - r) / CHUNK); iz <= Math.floor((cr.z + r) / CHUNK); iz++) {
       const x0 = ix * CHUNK, z0 = iz * CHUNK;
@@ -23,18 +28,53 @@ async function interchange(index: number) {
       heightfieldCollider(physics, N + 1, N + 1, h, x0 + CHUNK / 2, z0 + CHUNK / 2);
     }
   for (const c of CROSSINGS) if (Math.hypot(c.x - cr.x, c.z - cr.z) < r) for (const b of bridgeSolids(c)) addSolid(physics, b);
-  return { physics, cr };
+  return physics;
+}
+
+/** Drive along a curved road's points (either way), steering for the next point. */
+function driveCurve(physics: Physics, pts: readonly (readonly [number, number])[], hs: number[], speed: number) {
+  const [a, b] = [pts[0], pts[1]];
+  const car = new VehicleSim(physics, SPECS.bronco, a[0], hs[0] + 1, a[1], Math.atan2(b[0] - a[0], b[1] - a[1]));
+  const q = { surfaceAt, inStickZone: () => false, boostAt: () => false };
+  let target = 1, airborne = 0, maxJolt = 0, steps = 0;
+  let prev = car.body.linvel();
+  for (; steps < 60 * 150 && target < pts.length; steps++) {
+    const p = car.body.translation();
+    while (target < pts.length && Math.hypot(pts[target][0] - p.x, pts[target][1] - p.z) < 14) target++;
+    const t = pts[Math.min(target, pts.length - 1)];
+    const f = car.forward();
+    const tx = t[0] - p.x, tz = t[1] - p.z, tl = Math.hypot(tx, tz) || 1;
+    const steer = Math.max(-1, Math.min(1, ((f.x * tz - f.z * tx) / tl) * 3));
+    car.update(FIXED_DT, { steer, throttle: car.speed < speed ? 1 : 0, reverse: 0 }, HEALTHY, q);
+    physics.step();
+    const v = car.body.linvel();
+    if (steps > 60) {
+      maxJolt = Math.max(maxJolt, Math.hypot(v.x - prev.x, v.y - prev.y, v.z - prev.z));
+      if (car.wheelsInContact < 2) airborne++;
+    }
+    prev = v;
+  }
+  physics.world.removeRigidBody(car.body);
+  if (target !== pts.length && process.env.TRACE) {
+    const p = car.body.translation();
+    console.log(`stuck at ${target}/${pts.length}: car ${p.x.toFixed(0)},${p.y.toFixed(1)},${p.z.toFixed(0)} v=${car.speed.toFixed(1)} next h=${hs[target].toFixed(1)}`);
+  }
+  return { reached: target === pts.length, airborneFrac: airborne / steps, maxJolt };
 }
 
 /** Drive the right-hand lane of `h` from `from` to `to` (distance along it) at full throttle. */
 function driveLane(physics: Physics, h: Highway, from: number, to: number) {
   const dir = Math.sign(to - from);
   const lane = 7 * dir; // keep right
-  const at = (s: number, d: number) => ({ x: h.ax + h.ux * s - h.uz * d, z: h.az + h.uz * s + h.ux * d });
+  const at = (s: number, d: number) => {
+    const [x, z] = besideHighway(h, s, d);
+    return { x, z };
+  };
   const p0 = at(from, lane);
-  const heading = Math.atan2(h.ux * dir, h.uz * dir);
+  const u = pointAt(h, from);
+  const heading = Math.atan2(u.ux * dir, u.uz * dir);
   const car = new VehicleSim(physics, SPECS.bronco, p0.x, profileAt(h, from) + 1, p0.z, heading);
-  car.body.setLinvel({ x: h.ux * dir * 30, y: 0, z: h.uz * dir * 30 }, true);
+  car.body.setLinvel({ x: u.ux * dir * 30, y: 0, z: u.uz * dir * 30 }, true);
   const q = { surfaceAt, inStickZone: () => false, boostAt: () => false };
   let steps = 0, airborne = 0, maxJolt = 0, maxOff = 0;
   let prev = car.body.linvel();
@@ -116,5 +156,42 @@ describe('driving highway country', () => {
         expect(maxJolt).toBeLessThan(2.5);
         physics.world.removeRigidBody(car.body);
       }
+  }, 60000);
+
+  it('the town road takes you off the highway, through Mariano-ville and back on', async () => {
+    expect(TOWN).not.toBeNull();
+    const r = TOWN!.road;
+    const physics = await groundAround(TOWN!.x, TOWN!.z, 800);
+    for (const backwards of [false, true]) {
+      const pts = backwards ? [...r.pts].reverse() : r.pts, hs = backwards ? [...r.hs].reverse() : r.hs;
+      const run = driveCurve(physics, pts, hs, 18);
+      expect(run.reached, `backwards=${backwards}`).toBe(true);
+      expect(run.airborneFrac).toBeLessThan(0.03);
+      expect(run.maxJolt).toBeLessThan(2.5);
+    }
+  }, 60000);
+
+  it('a winding mountain highway can be driven at speed, in lane', async () => {
+    // The mountain highway that strays furthest from a straight line.
+    const { biomeAt } = await import('../src/world/biomes');
+    let best: { h: Highway; s: number } | null = null, bestOff = 0;
+    for (const h of HIGHWAYS)
+      for (let s = 1500; s < h.len - 1500; s += 100) {
+        const p = pointAt(h, s);
+        if (biomeAt(p.x, p.z).mountain < 0.9) continue;
+        const a = pointAt(h, s - 600), b = pointAt(h, s + 600);
+        const off = Math.abs(((p.x - a.x) * (b.z - a.z) - (p.z - a.z) * (b.x - a.x)) / Math.hypot(b.x - a.x, b.z - a.z));
+        if (off > bestOff) (bestOff = off), (best = { h, s });
+      }
+    expect(best).not.toBeNull();
+    const p = pointAt(best!.h, best!.s);
+    const physics = await groundAround(p.x, p.z, 900);
+    for (const dir of [1, -1]) {
+      const r = driveLane(physics, best!.h, best!.s - dir * 650, best!.s + dir * 650);
+      expect(r.finished).toBe(true);
+      expect(r.airborneFrac).toBeLessThan(0.03);
+      expect(r.maxJolt).toBeLessThan(2.5);
+      expect(r.maxOff).toBeLessThan(5);
+    }
   }, 60000);
 });

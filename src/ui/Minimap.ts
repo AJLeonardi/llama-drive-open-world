@@ -6,11 +6,11 @@
 import {
   ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR, HARBOR_X, LAKE, LOOP, MOUNTAIN, NYC, OUTER, RIVER, Road, TRACK, WORLD,
 } from '../world/layout';
-import { HIGHWAYS, OUTER_LAKES, RAMPS, RING } from '../world/outer';
-import { RING_APOTHEM, HEX } from '../world/bounds';
+import { HIGHWAYS, MAIN_ST, OUTER_LAKES, RAMPS, RING, TOWN, pointAt, profileAt, townPoint } from '../world/outer';
+import { RING_APOTHEM, HEX, hexDistance } from '../world/bounds';
 import { findRoute } from '../world/route';
-import { desertWeight } from '../world/biomes';
-import { CANYON } from '../world/hills';
+import { FieldKind, biomeAt, fieldKind, mountainWeight } from '../world/biomes';
+import { CANYON, terrainBase } from '../world/hills';
 import type { Vec2 } from '../util/math';
 
 const S = 0.5; // pixels per metre in the picture of the middle
@@ -32,7 +32,31 @@ export const DESTINATIONS: Destination[] = [
   { x: (DEMO_PARK.x0 + DEMO_PARK.x1) / 2, z: (DEMO_PARK.z0 + DEMO_PARK.z1) / 2, icon: '💥', label: 'Demolition Park' },
   { x: MOUNTAIN.x, z: MOUNTAIN.z, icon: '⛰️', label: 'Thunder Mountain' },
   { x: CANYON.x, z: (CANYON.z0 + CANYON.z1) / 2, icon: '🏜️', label: 'Red Canyon' },
+  ...countryDestinations(),
 ];
+
+/** Places out in highway country: the town, the highest mountain pass, the farms. */
+function countryDestinations(): Destination[] {
+  const out: Destination[] = [];
+  if (TOWN) {
+    const [x, z] = townPoint(TOWN, 0, MAIN_ST + 55);
+    out.push({ x, z, icon: '🍁', label: 'Mariano-ville' });
+  }
+  // The top of the highest pass, and the middle of farm country.
+  let pass: Destination | null = null, top = -Infinity, farm: Destination | null = null, farmBest = 0;
+  for (const h of HIGHWAYS)
+    for (let s = 300; s < h.len - 300; s += 100) {
+      const p = pointAt(h, s);
+      const b = biomeAt(p.x, p.z);
+      const y = profileAt(h, s);
+      if (b.mountain > 0.8 && y > top) (top = y), (pass = { x: p.x, z: p.z, icon: '🏔️', label: 'Snowy Pass' });
+      const f = b.farm - Math.abs(Math.hypot(p.x, p.z) - 3800) / 8000;
+      if (b.farm > 0.9 && f > farmBest) (farmBest = f), (farm = { x: p.x, z: p.z, icon: '🚜', label: 'Farm Country' });
+    }
+  if (pass) out.push(pass);
+  if (farm) out.push(farm);
+  return out;
+}
 
 const ROAD_STYLE: Record<Road['kind'], [string, number]> = {
   highway: ['#ffd23f', 1],
@@ -99,20 +123,50 @@ function drawMiddle(): HTMLCanvasElement {
  * 40 m over the whole map; drawn smoothed, under everything else.
  */
 function drawLand(): HTMLCanvasElement {
-  const M = 40;
+  const M = 48;
   const w = Math.round((OUTER.x1 - OUTER.x0) / M), h = Math.round((OUTER.z1 - OUTER.z0) / M);
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
   const g = c.getContext('2d')!;
   const img = g.createImageData(w, h);
-  const grass = [0x7f, 0xb3, 0x5d], sand = [0xe0, 0xb4, 0x78];
+  const at = (i: number, j: number) => [OUTER.x0 + (i + 0.5) * M, OUTER.z0 + (j + 0.5) * M] as const;
+  // Heights only where the land is steep enough to need shading (mountains, the edge).
+  const hs = new Float32Array(w * h);
+  const shaded = new Uint8Array(w * h);
   for (let j = 0; j < h; j++)
     for (let i = 0; i < w; i++) {
-      const d = desertWeight(OUTER.x0 + (i + 0.5) * M, OUTER.z0 + (j + 0.5) * M);
-      const k = (j * w + i) * 4;
-      for (let ch = 0; ch < 3; ch++) img.data[k + ch] = grass[ch] + (sand[ch] - grass[ch]) * d;
-      img.data[k + 3] = 255;
+      const [x, z] = at(i, j);
+      if (mountainWeight(x, z) > 0.02 || hexDistance(x, z) > RING_APOTHEM + 150) {
+        hs[j * w + i] = terrainBase(x, z);
+        shaded[j * w + i] = 1;
+      }
+    }
+  const FIELD: Record<FieldKind, number[]> = { wheat: [0xe6, 0xcd, 0x6c], crop: [0x8f, 0xc2, 0x5a], soil: [0xa0, 0x7a, 0x56], meadow: [0x86, 0xb9, 0x60], corn: [0x5f, 0x9a, 0x42] };
+  const grass = [0x7f, 0xb3, 0x5d], sand = [0xe0, 0xb4, 0x78], forest = [0x4a, 0x8a, 0x3c], autumn = [0xd3, 0x8b, 0x3a], snow = [0xf3, 0xf6, 0xf9], rock = [0x8d, 0x91, 0x96];
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const [x, z] = at(i, j);
+      const b = biomeAt(x, z);
+      const col = grass.slice();
+      const mix = (to: number[], k: number) => {
+        for (let ch = 0; ch < 3; ch++) col[ch] += (to[ch] - col[ch]) * k;
+      };
+      mix(sand, b.desert);
+      mix(forest, b.forest);
+      mix(autumn, b.forest * b.autumn * 0.85);
+      mix(FIELD[fieldKind(x, z)], b.farm * 0.65);
+      let shade = 1;
+      const k = j * w + i;
+      if (shaded[k] && i > 0 && j > 0 && i < w - 1 && j < h - 1) {
+        const gx = (hs[k + 1] - hs[k - 1]) / (2 * M), gz = (hs[k + w] - hs[k - w]) / (2 * M);
+        // Lit from the north-west, like a relief map.
+        shade = Math.max(0.55, Math.min(1.25, 1 + (gx + gz) * -0.9));
+        mix(snow, b.mountain);
+        mix(rock, b.mountain * Math.min(1, Math.max(0, (Math.hypot(gx, gz) - 0.8) * 2)));
+      }
+      for (let ch = 0; ch < 3; ch++) img.data[k * 4 + ch] = Math.min(255, col[ch] * shade);
+      img.data[k * 4 + 3] = 255;
     }
   g.putImageData(img, 0, 0);
   return c;
@@ -121,14 +175,11 @@ function drawLand(): HTMLCanvasElement {
 /** Highway country as paths in world metres (drawn under a transform at any zoom). */
 function countryPaths() {
   const highways = new Path2D();
-  for (const h of HIGHWAYS) {
-    highways.moveTo(h.ax, h.az);
-    highways.lineTo(h.ax + h.ux * h.len, h.az + h.uz * h.len);
-  }
+  for (const h of HIGHWAYS) h.pts.forEach(([x, z], i) => (i ? highways.lineTo(x, z) : highways.moveTo(x, z)));
   RING.pts.forEach(([x, z], i) => (i ? highways.lineTo(x, z) : highways.moveTo(x, z)));
   highways.closePath();
   const ramps = new Path2D();
-  for (const r of RAMPS) r.pts.forEach(([x, z], i) => (i ? ramps.lineTo(x, z) : ramps.moveTo(x, z)));
+  for (const r of [...RAMPS, ...(TOWN ? [TOWN.road] : [])]) r.pts.forEach(([x, z], i) => (i ? ramps.lineTo(x, z) : ramps.moveTo(x, z)));
   const lakes = new Path2D();
   for (const l of OUTER_LAKES) {
     lakes.moveTo(l.x + l.r, l.z);
@@ -193,7 +244,8 @@ function paintWorld(g: CanvasRenderingContext2D, middle: HTMLCanvasElement, land
   g.fillRect(OUTER.x0 - 2000, OUTER.z0 - 2000, OUTER.x1 - OUTER.x0 + 4000, OUTER.z1 - OUTER.z0 + 4000);
   g.imageSmoothingEnabled = true;
   g.drawImage(land, OUTER.x0, OUTER.z0, OUTER.x1 - OUTER.x0, OUTER.z1 - OUTER.z0);
-  g.fillStyle = '#8a9a6a';
+  // The hills beyond the Ring (the land picture shades the mountains among them).
+  g.fillStyle = 'rgba(110, 125, 90, 0.35)';
   g.fill(paths.hills, 'evenodd');
   g.drawImage(middle, WORLD.x0, WORLD.z0, WORLD.x1 - WORLD.x0, WORLD.z1 - WORLD.z0);
   g.fillStyle = '#4b93cf';
@@ -486,7 +538,8 @@ export class Minimap {
       g.fillStyle = '#ffe9a0';
       for (const hw of HIGHWAYS)
         for (const t of [0.25, 0.5, 0.75]) {
-          const lx = X(hw.ax + hw.ux * hw.len * t), ly = Z(hw.az + hw.uz * hw.len * t);
+          const p = pointAt(hw, hw.len * t);
+          const lx = X(p.x), ly = Z(p.z);
           if (lx < 0 || lx > w || ly < 0 || ly > h) continue;
           g.strokeText(hw.name, lx, ly);
           g.fillText(hw.name, lx, ly);

@@ -135,5 +135,6 @@ export function bushGeometry() {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(pos.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
   geometry.setIndex(idx);
+  geometry.userData.shared = true;
   return geometry;
 }

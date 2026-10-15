@@ -1,44 +1,54 @@
 // Highway country: the big map beyond the cities (pure data, no three.js / Rapier).
 //
-// Long straight highways run in three directions 60° apart (a triangle pattern, not a
+// Long highways run in three general directions 60° apart (a triangle pattern, not a
 // square grid), plus three spurs out from the cities, all ending on a six-sided Ring
-// highway round the outside. The lines are spaced so no three ever meet at one point,
-// which puts a crossing every ~870 m along each highway (~20 s at Bronco speed).
-// Where two highways cross, the newer one goes over on a bridge and four ramps link
-// them, one in each corner. Each highway's height follows a smoothed version of the
+// highway round the outside. Their straight "base lines" are spaced so no three ever
+// meet at one point; some are left out (more in the mountains) so the network isn't a
+// regular grid. Between interchanges each highway then sweeps from side to side in long
+// curves, wider and twistier in the mountains, where the land makes valleys for them.
+// Near each interchange a highway runs straight, so the crossings and ramps keep their
+// shape. Where two highways cross, the newer one goes over on a bridge and four ramps
+// link them, one in each corner. Each highway's height follows a smoothed version of the
 // land (never steeper than MAX_GRADE), and the land is cut and filled to meet it.
-// Lakes and radio towers dot the country.
+// Lakes and radio towers dot the country, and a small town sits off one highway.
 import { clamp, lerp, mulberry32, smoothstep, type Vec2 } from '../util/math';
 import { FAMILY_NORMALS, HEX, OUTER, RING_APOTHEM, WORLD, hexDistance } from './bounds';
 import { terrainBase } from './hills';
-import { desertWeight } from './biomes';
+import { biomeAt, desertWeight, mountainWeight } from './biomes';
+import { setCorridors } from './corridors';
 
 /** Highway half-width (6 lanes + shoulders, like the one between the cities). */
 export const HW = 15;
 /** Ramp (connector) half-width. */
 export const RAMP_HW = 6;
+/** Town road half-width. */
+export const TOWN_HW = 5;
 /** How far the upper highway rises to clear the lower one. */
 export const OVERPASS_RISE = 8.5;
-const PROFILE_STEP = 25;
+export const PROFILE_STEP = 25;
 const MAX_GRADE = 0.07;
 /** Line spacing within each direction. */
 const SPACING = 1100;
 /** Radius of the Ring's rounded corners. */
 const RING_CORNER = 450;
+/** A highway runs straight for this far either side of an interchange, then may start to curve. */
+const STRAIGHT_NEAR = 480;
+const CURVE_IN = 1400;
 
-/** A straight highway. */
+/** A highway: a gently curving line on the map. */
 export interface Highway {
   id: number;
   /** Shown on signs: "RT 7". */
   name: string;
-  ax: number;
-  az: number;
-  ux: number;
-  uz: number;
+  /** Points every PROFILE_STEP m along it (the last one at `len`). */
+  pts: Vec2[];
+  /** Direction of travel (unit vector) at each point. */
+  dirs: Vec2[];
   len: number;
-  /** Road height every PROFILE_STEP m from the start. */
+  /** Road height at each point. */
   profile: Float32Array;
   spur: boolean;
+  x0: number; z0: number; x1: number; z1: number;
 }
 
 export interface Crossing {
@@ -57,14 +67,14 @@ export interface Crossing {
   flat: number;
 }
 
-/** A curved road (an interchange ramp, or the Ring) as points with a road height at each. */
+/** A curved road (an interchange ramp, the Ring, or the town road) as points with a road height at each. */
 export interface CurveRoad {
-  kind: 'ramp' | 'ring';
+  kind: 'ramp' | 'ring' | 'town';
   pts: Vec2[];
   hs: number[];
   hw: number;
   closed: boolean;
-  /** Ramps: the highway they leave from and the one they join. */
+  /** Ramps: the highway they leave from and the one they join (the town road: its highway, twice). */
   from: number;
   to: number;
   x0: number; z0: number; x1: number; z1: number;
@@ -74,9 +84,9 @@ export interface OuterLake { x: number; z: number; r: number; level: number; dep
 export interface Tower { x: number; z: number; h: number }
 
 /** Distance outside WORLD (negative inside). */
-const outsideWorld = (x: number, z: number) => Math.max(WORLD.x0 - x, x - WORLD.x1, WORLD.z0 - z, z - WORLD.z1);
+export const outsideWorld = (x: number, z: number) => Math.max(WORLD.x0 - x, x - WORLD.x1, WORLD.z0 - z, z - WORLD.z1);
 
-function bbox(pts: Vec2[]) {
+function bbox(pts: readonly Vec2[]) {
   let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
   for (const [x, z] of pts) (x0 = Math.min(x0, x)), (x1 = Math.max(x1, x)), (z0 = Math.min(z0, z)), (z1 = Math.max(z1, z));
   return { x0, z0, x1, z1 };
@@ -130,12 +140,9 @@ function ringPoints(): Vec2[] {
   return dense;
 }
 
-function makeRing(): CurveRoad {
-  const pts = ringPoints();
-  const hs = Array.from(shapeProfile(pts.map(([x, z]) => terrainBase(x, z)), 16, PROFILE_STEP));
-  return { kind: 'ring', pts, hs, hw: HW, closed: true, from: -1, to: -1, ...bbox(pts) };
-}
-export const RING: CurveRoad = makeRing();
+const RING_PTS = ringPoints();
+/** The Ring (its heights are filled in once the mountains know where the roads are). */
+export const RING: CurveRoad = { kind: 'ring', pts: RING_PTS, hs: [], hw: HW, closed: true, from: -1, to: -1, ...bbox(RING_PTS) };
 
 /** Where the line a + t·u meets the Ring, beyond t0 (forwards) — the end of a highway. */
 function meetRing(ax: number, az: number, ux: number, uz: number, after: number) {
@@ -163,7 +170,10 @@ function ringHeight(x: number, z: number) {
   return h;
 }
 
-// ---------------------------------------------------------------- straight highways
+// ---------------------------------------------------------------- base lines
+
+/** A highway's straight base line, before it's given its curves. */
+interface Line { ax: number; az: number; ux: number; uz: number; len: number; spur: boolean }
 
 /**
  * Line k of each direction sits at SPACING·(k + phase) from the middle. The normals
@@ -190,10 +200,16 @@ const SPURS: { x: number; z: number; ux: number; uz: number }[] = [
   { x: -700, z: -448, ux: 0, uz: -1 }, // north, from Boston's ring road
   { x: -540, z: 448, ux: 0, uz: 1 }, // south, from Boston's ring road
 ];
+/**
+ * Which lines of each direction are built (a third or so of them): enough for every
+ * region to have a few highways, with long stretches between interchanges for the
+ * curves, and several running through the mountains.
+ */
+const CHOSEN: Record<number, number[]> = { 0: [1, 3], 1: [2, 4], 2: [-3, 2, 4] };
 
-function makeLines() {
-  const out: Omit<Highway, 'profile'>[] = [];
-  for (const sp of SPURS) out.push({ id: 0, name: '', ax: sp.x, az: sp.z, ux: sp.ux, uz: sp.uz, len: meetRing(sp.x, sp.z, sp.ux, sp.uz, 0), spur: true });
+function baseLines(): Line[] {
+  const out: Line[] = [];
+  for (const sp of SPURS) out.push({ ax: sp.x, az: sp.z, ux: sp.ux, uz: sp.uz, len: meetRing(sp.x, sp.z, sp.ux, sp.uz, 0), spur: true });
   FAMILY_NORMALS.forEach((angle, fi) => {
     const nx = Math.cos(angle), nz = Math.sin(angle);
     const ux = -nz, uz = nx;
@@ -212,61 +228,324 @@ function makeLines() {
       const t0 = meetRing(px, pz, ux, uz, 0);
       const t1 = meetRing(px, pz, ux, uz, t0 + 1);
       if (!isFinite(t1)) continue;
-      out.push({ id: 0, name: '', ax: px + ux * t0, az: pz + uz * t0, ux, uz, len: t1 - t0, spur: false });
+      const line = { ax: px + ux * t0, az: pz + uz * t0, ux, uz, len: t1 - t0, spur: false };
+      if (CHOSEN[fi].includes(k)) out.push(line);
     }
   });
-  out.forEach((h, i) => ((h.id = i), (h.name = `RT ${i + 1}`)));
   return out;
 }
 
-function findCrossings(lines: Omit<Highway, 'profile'>[]): Crossing[] {
-  const out: Crossing[] = [];
-  for (let i = 0; i < lines.length; i++)
-    for (let j = i + 1; j < lines.length; j++) {
-      const a = lines[i], b = lines[j];
-      const den = a.ux * b.uz - a.uz * b.ux;
-      if (Math.abs(den) < 0.2) continue; // parallel
-      const dx = b.ax - a.ax, dz = b.az - a.az;
-      const sa = (dx * b.uz - dz * b.ux) / den, sb = (dx * a.uz - dz * a.ux) / den;
-      // (Crossings right next to the Ring stay level: just a flat junction.)
-      if (sa < 650 || sa > a.len - 650 || sb < 650 || sb > b.len - 650) continue;
-      const x = a.ax + a.ux * sa, z = a.az + a.uz * sa;
-      // Level the interchange to the average lie of the land around it (a wide average,
-      // so neighbouring interchanges end up at similar heights).
-      let h0 = 0, n = 0;
-      for (let r = 0; r <= 800; r += 200)
-        for (let k = 0; k < (r ? 8 : 1); k++) {
-          h0 += terrainBase(x + Math.cos(k * 0.785) * r, z + Math.sin(k * 0.785) * r);
-          n++;
-        }
-      const sin = Math.abs(den);
-      out.push({ x, z, upper: j, lower: i, sUpper: sb, sLower: sa, h0: h0 / n, sin, flat: Math.max(45, (HW + 12) / sin + 20) });
+/** Where two straight lines cross (distances along each), if within both. */
+function lineCross(a: Line, b: Line) {
+  const den = a.ux * b.uz - a.uz * b.ux;
+  if (Math.abs(den) < 0.2) return null; // parallel
+  const dx = b.ax - a.ax, dz = b.az - a.az;
+  const sa = (dx * b.uz - dz * b.ux) / den, sb = (dx * a.uz - dz * a.ux) / den;
+  if (sa < 0 || sa > a.len || sb < 0 || sb > b.len) return null;
+  return { sa, sb };
+}
+
+// ---------------------------------------------------------------- curves
+
+/**
+ * A highway along a base line, swinging from side to side between its interchanges:
+ * two slow waves added together, faded out near every crossing, near its ends, near
+ * the middle of the map and near the Ring. Wider in the mountains.
+ */
+function curvedLine(l: Line, crossAt: number[], amp: number, seed: number) {
+  const rng = mulberry32(seed);
+  const ph1 = rng() * 6.283, ph2 = rng() * 6.283;
+  const lam1 = 2500 + rng() * 800, lam2 = 1200 + rng() * 400;
+  const FINE = 5;
+  const n = Math.ceil(l.len / FINE);
+  const fine: Vec2[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = Math.min(l.len, i * FINE);
+    const bx = l.ax + l.ux * t, bz = l.az + l.uz * t;
+    let w = l.spur ? 0 : amp;
+    if (w > 0) {
+      w *= smoothstep(STRAIGHT_NEAR, CURVE_IN, t) * smoothstep(STRAIGHT_NEAR, CURVE_IN, l.len - t);
+      w *= smoothstep(200, 900, outsideWorld(bx, bz)) * (1 - smoothstep(RING_APOTHEM - 1100, RING_APOTHEM - 500, hexDistance(bx, bz)));
+      for (const sc of crossAt) w *= smoothstep(STRAIGHT_NEAR, CURVE_IN, Math.abs(t - sc));
     }
+    const A = w * lerp(260, 470, mountainWeight(bx, bz));
+    const off = A * (0.68 * Math.sin((6.283 * t) / lam1 + ph1) + 0.32 * Math.sin((6.283 * t) / lam2 + ph2));
+    fine.push([bx - l.uz * off, bz + l.ux * off]);
+  }
+  // Re-space the points evenly along the curve.
+  const cum = [0];
+  for (let i = 1; i < fine.length; i++) cum.push(cum[i - 1] + Math.hypot(fine[i][0] - fine[i - 1][0], fine[i][1] - fine[i - 1][1]));
+  const len = cum[cum.length - 1];
+  const pts: Vec2[] = [], dirs: Vec2[] = [];
+  let j = 0;
+  const count = Math.ceil(len / PROFILE_STEP) + 1;
+  for (let k = 0; k < count; k++) {
+    const s = Math.min(len, k * PROFILE_STEP);
+    while (j < fine.length - 2 && cum[j + 1] < s) j++;
+    const f = (s - cum[j]) / (cum[j + 1] - cum[j] || 1);
+    pts.push([lerp(fine[j][0], fine[j + 1][0], f), lerp(fine[j][1], fine[j + 1][1], f)]);
+    const a = fine[Math.max(0, j - 1)], b = fine[Math.min(fine.length - 1, j + 2)];
+    const dl = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    dirs.push([(b[0] - a[0]) / dl, (b[1] - a[1]) / dl]);
+  }
+  return { pts, dirs, len };
+}
+
+/** Every point where two polylines cross: distances along each, and the crossing's sine. */
+function polyCrossings(a: { pts: Vec2[] }, b: { pts: Vec2[] }) {
+  const out: { x: number; z: number; sa: number; sb: number; sin: number }[] = [];
+  const A = bbox(a.pts), B = bbox(b.pts);
+  if (A.x1 < B.x0 || B.x1 < A.x0 || A.z1 < B.z0 || B.z1 < A.z0) return out;
+  for (let i = 0; i < a.pts.length - 1; i++) {
+    const [p, q] = [a.pts[i], a.pts[i + 1]];
+    const minx = Math.min(p[0], q[0]), maxx = Math.max(p[0], q[0]), minz = Math.min(p[1], q[1]), maxz = Math.max(p[1], q[1]);
+    if (maxx < B.x0 || minx > B.x1 || maxz < B.z0 || minz > B.z1) continue;
+    for (let j = 0; j < b.pts.length - 1; j++) {
+      const [r, t] = [b.pts[j], b.pts[j + 1]];
+      if (Math.max(r[0], t[0]) < minx || Math.min(r[0], t[0]) > maxx || Math.max(r[1], t[1]) < minz || Math.min(r[1], t[1]) > maxz) continue;
+      const ex = q[0] - p[0], ez = q[1] - p[1], fx = t[0] - r[0], fz = t[1] - r[1];
+      const den = ex * fz - ez * fx;
+      if (Math.abs(den) < 1e-9) continue;
+      const dx = r[0] - p[0], dz = r[1] - p[1];
+      const u = (dx * fz - dz * fx) / den, v = (dx * ez - dz * ex) / den;
+      if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
+      const le = Math.hypot(ex, ez), lf = Math.hypot(fx, fz);
+      out.push({ x: p[0] + ex * u, z: p[1] + ez * u, sa: i * PROFILE_STEP + u * le, sb: j * PROFILE_STEP + v * lf, sin: Math.abs(den) / (le * lf) });
+    }
+  }
   return out;
 }
+
+/** Closest the two polylines come to each other away from where they cross (m). */
+function nearMiss(a: { pts: Vec2[] }, b: { pts: Vec2[] }, crossings: { x: number; z: number }[]) {
+  let best = Infinity;
+  const B = bbox(b.pts), M = 200;
+  for (let i = 0; i < a.pts.length; i += 2) {
+    const [x, z] = a.pts[i];
+    if (x < B.x0 - M || x > B.x1 + M || z < B.z0 - M || z > B.z1 + M) continue;
+    if (crossings.some((c) => Math.hypot(c.x - x, c.z - z) < 420)) continue;
+    for (let j = 0; j < b.pts.length; j += 2) {
+      const d = Math.hypot(b.pts[j][0] - x, b.pts[j][1] - z);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Give the base lines their curves, gentler on any whose curves would run into another
+ * highway (crossing it a second time, or passing too close), until none do.
+ */
+function makeNetwork() {
+  const lines = baseLines();
+  const crossAt: number[][] = lines.map(() => []);
+  const expected = new Map<string, number>();
+  for (let i = 0; i < lines.length; i++)
+    for (let j = i + 1; j < lines.length; j++) {
+      const c = lineCross(lines[i], lines[j]);
+      expected.set(`${i},${j}`, c ? 1 : 0);
+      if (c) crossAt[i].push(c.sa), crossAt[j].push(c.sb);
+    }
+  const amps = lines.map(() => 1);
+  const curves = lines.map((l, i) => curvedLine(l, crossAt[i], amps[i], 1000 + i * 37));
+  let changed = new Set(lines.map((_, i) => i));
+  for (let round = 0; round < 8; round++) {
+    const bad = new Set<number>();
+    for (let i = 0; i < lines.length; i++)
+      for (let j = i + 1; j < lines.length; j++) {
+        if (!changed.has(i) && !changed.has(j)) continue;
+        const cs = polyCrossings(curves[i], curves[j]);
+        // Spurs start on a city ring road; lines through the middle may touch them there.
+        if (cs.length !== expected.get(`${i},${j}`) || cs.some((c) => c.sin < 0.8) || nearMiss(curves[i], curves[j], cs) < 2 * HW + 90) {
+          if (amps[i] > 0) bad.add(i);
+          if (amps[j] > 0) bad.add(j);
+        }
+      }
+    // No bend tighter than a gentle highway curve.
+    curves.forEach((c, i) => {
+      if (amps[i] > 0 && tightestRadius(c.pts) < 230) bad.add(i);
+    });
+    if (!bad.size) break;
+    changed = bad;
+    for (const i of bad) {
+      amps[i] = round >= 6 ? 0 : amps[i] * 0.8;
+      curves[i] = curvedLine(lines[i], crossAt[i], amps[i], 1000 + i * 37);
+    }
+  }
+  return lines.map((l, i) => ({ ...curves[i], spur: l.spur }));
+}
+
+// ---------------------------------------------------------------- highways and interchanges
 
 /** 0..1 shape of the upper highway's climb over a bridge. */
 const HUMP_RAMP = 280;
 const hump = (d: number, flat: number) => (d < flat ? 1 : 1 - smoothstep(flat, flat + HUMP_RAMP, d));
+/** Road kept level for this far either side of an interchange. */
+const PIN = 250;
+
+/** Position and direction a distance `s` along a highway (carried on straight past its ends). */
+export function pointAt(h: Highway, s: number) {
+  const n = h.pts.length;
+  if (s <= 0 || s >= h.len) {
+    const k = s <= 0 ? 0 : n - 1, e = s <= 0 ? s : s - h.len;
+    const [ux, uz] = h.dirs[k];
+    return { x: h.pts[k][0] + ux * e, z: h.pts[k][1] + uz * e, ux, uz };
+  }
+  const k = Math.min(n - 2, Math.floor(s / PROFILE_STEP));
+  const s0 = k * PROFILE_STEP, s1 = Math.min(h.len, (k + 1) * PROFILE_STEP);
+  const f = (s - s0) / (s1 - s0 || 1);
+  const [a, b] = [h.pts[k], h.pts[k + 1]], [da, db] = [h.dirs[k], h.dirs[k + 1]];
+  const ux = lerp(da[0], db[0], f), uz = lerp(da[1], db[1], f), ul = Math.hypot(ux, uz) || 1;
+  return { x: lerp(a[0], b[0], f), z: lerp(a[1], b[1], f), ux: ux / ul, uz: uz / ul };
+}
+
+/** The spot `d` m to the side of a highway (positive = to the left of travel, i.e. (−uz, ux)), `s` along it. */
+export function besideHighway(h: Highway, s: number, d: number): Vec2 {
+  const p = pointAt(h, s);
+  return [p.x - p.uz * d, p.z + p.ux * d];
+}
+
+/** Road height of highway `h` at distance `s` along it. */
+export function profileAt(h: Highway, s: number) {
+  const f = clamp(s / PROFILE_STEP, 0, h.profile.length - 1);
+  const k = Math.min(h.profile.length - 2, Math.floor(f));
+  return lerp(h.profile[k], h.profile[k + 1], f - k);
+}
+
+export const HIGHWAYS: Highway[] = makeNetwork().map((c, i) => ({ id: i, name: `RT ${i + 1}`, ...c, profile: new Float32Array(0), ...bbox(c.pts) }));
+
+// Highway segments bucketed for fast "where am I relative to this highway" queries.
+const HB = 128, HPAD = 220;
+const hwBuckets = new Map<number, number[]>(); // id * 65536 + segment
+const hbKey = (ix: number, iz: number) => ix * 100003 + iz;
+for (const h of HIGHWAYS)
+  for (let i = 0; i < h.pts.length - 1; i++) {
+    const [a, b] = [h.pts[i], h.pts[i + 1]];
+    for (let ix = Math.floor((Math.min(a[0], b[0]) - HPAD) / HB); ix <= Math.floor((Math.max(a[0], b[0]) + HPAD) / HB); ix++)
+      for (let iz = Math.floor((Math.min(a[1], b[1]) - HPAD) / HB); iz <= Math.floor((Math.max(a[1], b[1]) + HPAD) / HB); iz++) {
+        const k = hbKey(ix, iz);
+        let l = hwBuckets.get(k);
+        if (!l) hwBuckets.set(k, (l = []));
+        l.push(h.id * 65536 + i);
+      }
+  }
+
+/** Where a point sits relative to segment i of a highway: distance along, signed distance across, distance away. */
+function segCoords(h: Highway, i: number, x: number, z: number) {
+  const [ax, az] = h.pts[i], [bx, bz] = h.pts[i + 1];
+  const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
+  let t = ((x - ax) * dx + (z - az) * dz) / (L * L);
+  if (i > 0) t = Math.max(0, t);
+  if (i < h.pts.length - 2) t = Math.min(1, t);
+  const across = (-(x - ax) * dz + (z - az) * dx) / L;
+  const away = Math.hypot(x - ax - dx * t, z - az - dz * t);
+  const d = t < 0 || t > 1 ? across : Math.sign(across || 1) * away;
+  return { s: i * PROFILE_STEP + t * L, d, away: t < 0 || t > 1 ? Math.abs(across) : away };
+}
+
+/**
+ * Where a point sits relative to a highway: distance along it, and signed distance
+ * across (positive to the left of travel). Beyond the ends it carries on straight.
+ */
+export function highwayCoords(h: Highway, x: number, z: number) {
+  let best = { s: 0, d: Infinity, away: Infinity };
+  const cands = hwBuckets.get(hbKey(Math.floor(x / HB), Math.floor(z / HB)));
+  let found = false;
+  if (cands)
+    for (const e of cands) {
+      if (e >> 16 !== h.id) continue;
+      found = true;
+      const c = segCoords(h, e & 0xffff, x, z);
+      if (c.away < best.away) best = c;
+    }
+  if (!found) for (let i = 0; i < h.pts.length - 1; i++) {
+    const c = segCoords(h, i, x, z);
+    if (c.away < best.away) best = c;
+  }
+  return { s: best.s, d: best.d };
+}
+
+const nearBest = new Float64Array(64 * 3);
+const nearSeen: number[] = [];
+/** Calls `f` for each highway within ~200 m of a point, with where the point sits relative to it. */
+export function forNearHighways(x: number, z: number, f: (h: Highway, s: number, d: number) => void) {
+  const cands = hwBuckets.get(hbKey(Math.floor(x / HB), Math.floor(z / HB)));
+  if (!cands) return;
+  nearSeen.length = 0;
+  for (const e of cands) {
+    const id = e >> 16;
+    const c = segCoords(HIGHWAYS[id], e & 0xffff, x, z);
+    let slot = nearSeen.indexOf(id);
+    if (slot < 0) {
+      slot = nearSeen.length;
+      nearSeen.push(id);
+      nearBest[slot * 3 + 2] = Infinity;
+    }
+    if (c.away < nearBest[slot * 3 + 2]) (nearBest[slot * 3] = c.s), (nearBest[slot * 3 + 1] = c.d), (nearBest[slot * 3 + 2] = c.away);
+  }
+  const ids = nearSeen.slice();
+  ids.forEach((id, slot) => f(HIGHWAYS[id], nearBest[slot * 3], nearBest[slot * 3 + 1]));
+}
+
+function findCrossings(): Crossing[] {
+  const out: Crossing[] = [];
+  for (let i = 0; i < HIGHWAYS.length; i++)
+    for (let j = i + 1; j < HIGHWAYS.length; j++) {
+      const a = HIGHWAYS[i], b = HIGHWAYS[j];
+      for (const c of polyCrossings(a, b)) {
+        // (Crossings right next to the Ring stay level: just a flat junction.)
+        if (c.sa < 650 || c.sa > a.len - 650 || c.sb < 650 || c.sb > b.len - 650) continue;
+        // Level the interchange to the average lie of the land along both highways
+        // (so in the mountains it sits on the valley floor, not halfway up a peak).
+        let h0 = 0, n = 0;
+        for (const [h, s] of [[a, c.sa], [b, c.sb]] as const)
+          for (let o = -800; o <= 800; o += 100) {
+            const p = pointAt(h, s + o);
+            h0 += terrainBase(p.x, p.z);
+            n++;
+          }
+        out.push({ x: c.x, z: c.z, upper: j, lower: i, sUpper: c.sb, sLower: c.sa, h0: h0 / n, sin: c.sin, flat: Math.max(45, (HW + 12) / c.sin + 20) });
+      }
+    }
+  return out;
+}
 
 /**
  * Neighbouring interchanges along a highway must be close enough in height for the
  * road between them to stay under MAX_GRADE: nudge them together until they are.
  */
-function settleInterchanges(lines: Omit<Highway, 'profile'>[], crossings: Crossing[]) {
-  for (let pass = 0; pass < 30; pass++) {
+function settleInterchanges(crossings: Crossing[]) {
+  // Each highway's ends are fixed too: the Ring's height, or (for a spur) level with the city.
+  const ends = HIGHWAYS.map((h) => {
+    const out: { s: number; h0: number; pin: number }[] = [{ s: h.len, h0: ringHeight(...h.pts[h.pts.length - 1]), pin: 0 }];
+    if (!h.spur) out.push({ s: 0, h0: ringHeight(...h.pts[0]), pin: 0 });
+    else {
+      let k = 0;
+      while (k < h.pts.length - 1 && outsideWorld(...h.pts[k + 1]) < -300) k++;
+      out.push({ s: k * PROFILE_STEP, h0: 0, pin: 0 });
+    }
+    return out;
+  });
+  for (let pass = 0; pass < 40; pass++) {
     let moved = false;
-    for (const l of lines) {
-      const mine = crossings.filter((c) => c.upper === l.id || c.lower === l.id).sort((a, b) => (a.upper === l.id ? a.sUpper : a.sLower) - (b.upper === l.id ? b.sUpper : b.sLower));
+    for (const l of HIGHWAYS) {
+      type P = { s: number; h0: number; pin: number; c?: Crossing };
+      const mine: P[] = crossings.filter((c) => c.upper === l.id || c.lower === l.id).map((c) => ({ s: c.upper === l.id ? c.sUpper : c.sLower, h0: c.h0, pin: PIN, c }));
+      mine.push(...ends[l.id]);
+      mine.sort((a, b) => a.s - b.s);
       for (let i = 1; i < mine.length; i++) {
         const a = mine[i - 1], b = mine[i];
-        const gap = Math.abs((b.upper === l.id ? b.sUpper : b.sLower) - (a.upper === l.id ? a.sUpper : a.sLower)) - 2 * PIN;
-        const allowed = Math.max(0, gap) * MAX_GRADE * 0.85;
+        const gap = b.s - a.s - a.pin - b.pin - 60;
+        const allowed = Math.max(0, gap) * MAX_GRADE * 0.8;
         const diff = b.h0 - a.h0;
         if (Math.abs(diff) > allowed + 0.01) {
-          const fix = (Math.abs(diff) - allowed) / 2 * Math.sign(diff);
-          a.h0 += fix;
-          b.h0 -= fix;
+          const excess = (Math.abs(diff) - allowed) * Math.sign(diff);
+          // Ends don't move: the interchange takes all of it.
+          const fa = a.c ? (b.c ? 0.5 : 1) : 0, fb = b.c ? (a.c ? 0.5 : 1) : 0;
+          if (a.c) a.c.h0 += excess * fa;
+          if (b.c) b.c.h0 -= excess * fb;
+          a.h0 = a.c ? a.c.h0 : a.h0;
+          b.h0 = b.c ? b.c.h0 : b.h0;
           moved = true;
         }
       }
@@ -275,15 +554,9 @@ function settleInterchanges(lines: Omit<Highway, 'profile'>[], crossings: Crossi
   }
 }
 
-/** Road kept level for this far either side of an interchange. */
-const PIN = 250;
-
-function makeProfile(h: Omit<Highway, 'profile'>, crossings: Crossing[]) {
-  const n = Math.ceil(h.len / PROFILE_STEP) + 1;
-  const at = (k: number): Vec2 => {
-    const s = Math.min(h.len, k * PROFILE_STEP);
-    return [h.ax + h.ux * s, h.az + h.uz * s];
-  };
+function makeProfile(h: Highway, crossings: Crossing[]) {
+  const n = h.pts.length;
+  const at = (k: number) => h.pts[k];
   const mine = crossings.filter((c) => c.upper === h.id || c.lower === h.id).map((c) => ({ c, s: c.upper === h.id ? c.sUpper : c.sLower }));
   const endH = ringHeight(...at(n - 1)), startH = h.spur ? 0 : ringHeight(...at(0));
   // Pinned heights: level at each interchange, meeting the Ring (or the city) at the ends.
@@ -313,13 +586,15 @@ function makeProfile(h: Omit<Highway, 'profile'>, crossings: Crossing[]) {
   return p;
 }
 
-export const HIGHWAYS: Highway[] = [];
 export const CROSSINGS: Crossing[] = [];
 {
-  const lines = makeLines();
-  CROSSINGS.push(...findCrossings(lines));
-  settleInterchanges(lines, CROSSINGS);
-  for (const l of lines) HIGHWAYS.push({ ...l, profile: makeProfile(l, CROSSINGS) });
+  // The mountains make valleys along the roads, so they must know where the roads are
+  // before anything asks how high the land is.
+  setCorridors([...HIGHWAYS.map((h) => ({ pts: h.pts, closed: false })), { pts: RING.pts, closed: true }]);
+  RING.hs = Array.from(shapeProfile(RING.pts.map(([x, z]) => terrainBase(x, z)), 16, PROFILE_STEP));
+  CROSSINGS.push(...findCrossings());
+  settleInterchanges(CROSSINGS);
+  for (const h of HIGHWAYS) h.profile = makeProfile(h, CROSSINGS);
   // Where a lower highway is itself climbing over a nearby bridge, lift the upper one
   // a bit more so every bridge still has full headroom.
   for (const c of CROSSINGS) {
@@ -328,19 +603,6 @@ export const CROSSINGS: Crossing[] = [];
     if (short <= 0) continue;
     for (let k = 0; k < U.profile.length; k++) U.profile[k] += short * hump(Math.abs(k * PROFILE_STEP - c.sUpper), c.flat);
   }
-}
-
-/** Road height of highway `h` at distance `s` along it. */
-export function profileAt(h: Highway, s: number) {
-  const f = clamp(s / PROFILE_STEP, 0, h.profile.length - 1);
-  const k = Math.min(h.profile.length - 2, Math.floor(f));
-  return lerp(h.profile[k], h.profile[k + 1], f - k);
-}
-
-/** Where a point sits relative to a highway: distance along it, and signed distance across. */
-export function highwayCoords(h: Highway, x: number, z: number) {
-  const dx = x - h.ax, dz = z - h.az;
-  return { s: dx * h.ux + dz * h.uz, d: -dx * h.uz + dz * h.ux };
 }
 
 // ---------------------------------------------------------------- ramps
@@ -352,27 +614,32 @@ function rampCandidates(): CurveRoad[] {
   const out: CurveRoad[] = [];
   for (const c of CROSSINGS) {
     const U = HIGHWAYS[c.upper], L = HIGHWAYS[c.lower];
+    // Both highways run straight near the crossing: work in their directions there.
+    const fu = pointAt(U, c.sUpper), fl = pointAt(L, c.sLower);
+    const Ux = fu.ux, Uz = fu.uz, Lx = fl.ux, Lz = fl.uz;
+    const sOnU = (x: number, z: number) => c.sUpper + (x - c.x) * Ux + (z - c.z) * Uz;
+    const sOnL = (x: number, z: number) => c.sLower + (x - c.x) * Lx + (z - c.z) * Lz;
     // Leave the upper highway well before its climb to the bridge.
     const dU = c.flat + HUMP_RAMP + 90;
     for (const sa of [-1, 1])
       for (const sb of [-1, 1]) {
         // Which side of each highway this corner is on.
-        const sideU = Math.sign((-U.uz * L.ux + U.ux * L.uz) * sb);
-        const sideL = Math.sign((-L.uz * U.ux + L.ux * U.uz) * sa);
-        const p1: Vec2 = [c.x + U.ux * sa * dU - U.uz * sideU * (HW - 3), c.z + U.uz * sa * dU + U.ux * sideU * (HW - 3)];
+        const sideU = Math.sign((-Uz * Lx + Ux * Lz) * sb);
+        const sideL = Math.sign((-Lz * Ux + Lx * Uz) * sa);
+        const p1: Vec2 = [c.x + Ux * sa * dU - Uz * sideU * (HW - 3), c.z + Uz * sa * dU + Ux * sideU * (HW - 3)];
         // How far the ramp has to turn: sharp corners (two highways at 60°) need a 120°
         // turn, so they start and end further out to leave room for a gentle curve.
-        const turn = Math.acos(Math.max(-1, Math.min(1, -(U.ux * sa * L.ux * sb + U.uz * sa * L.uz * sb))));
+        const turn = Math.acos(Math.max(-1, Math.min(1, -(Ux * sa * Lx * sb + Uz * sa * Lz * sb))));
         const dL = turn > Math.PI / 2 ? RAMP_LOWER * 1.9 : RAMP_LOWER;
-        const p2: Vec2 = [c.x + L.ux * sb * dL - L.uz * sideL * (HW - 3), c.z + L.uz * sb * dL + L.ux * sideL * (HW - 3)];
+        const p2: Vec2 = [c.x + Lx * sb * dL - Lz * sideL * (HW - 3), c.z + Lz * sb * dL + Lx * sideL * (HW - 3)];
         // A smooth S: it leaves running alongside the upper highway (heading towards the
         // crossing) and arrives running alongside the lower one (heading away from it),
         // like a real exit and entrance, rather than turning off at an angle.
         // Curve handles: long enough for a gentle turn, never reaching back towards the bridge.
         const chord = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) * (turn > Math.PI / 2 ? 0.6 : 0.42);
         const h1 = Math.min(chord, dU * 0.5), h2 = Math.min(chord, dL * 0.5);
-        const k1: Vec2 = [p1[0] - U.ux * sa * h1, p1[1] - U.uz * sa * h1];
-        const k2: Vec2 = [p2[0] - L.ux * sb * h2, p2[1] - L.uz * sb * h2];
+        const k1: Vec2 = [p1[0] - Ux * sa * h1, p1[1] - Uz * sa * h1];
+        const k2: Vec2 = [p2[0] - Lx * sb * h2, p2[1] - Lz * sb * h2];
         const pts: Vec2[] = [], hs: number[] = [];
         const N = 36;
         for (let i = 0; i <= N; i++) {
@@ -382,8 +649,7 @@ function rampCandidates(): CurveRoad[] {
           // Follow each highway's own height while alongside it (the upper one may already be
           // climbing to its bridge), easing from one to the other in between.
           const [x, z] = pts[pts.length - 1];
-          const onU = profileAt(U, highwayCoords(U, x, z).s), onL = profileAt(L, highwayCoords(L, x, z).s);
-          hs.push(lerp(onU, onL, smoothstep(0.15, 0.85, t)));
+          hs.push(lerp(profileAt(U, sOnU(x, z)), profileAt(L, sOnL(x, z)), smoothstep(0.15, 0.85, t)));
         }
         out.push({ kind: 'ramp', pts, hs, hw: RAMP_HW, closed: false, from: U.id, to: L.id, ...bbox(pts) });
       }
@@ -392,7 +658,7 @@ function rampCandidates(): CurveRoad[] {
 }
 
 /** The tightest turn along a polyline (radius, m). */
-function tightestRadius(pts: Vec2[]) {
+export function tightestRadius(pts: readonly Vec2[]) {
   let min = Infinity;
   for (let i = 1; i < pts.length - 1; i++) {
     const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
@@ -403,21 +669,26 @@ function tightestRadius(pts: Vec2[]) {
   return min;
 }
 
+/** Does a stretch of curved road run into a highway other than the ones it joins? */
+function hitsOtherHighway(pts: readonly Vec2[], hw: number, except: number[]) {
+  return pts.some(([x, z]) => {
+    let hit = false;
+    forNearHighways(x, z, (h, s, d) => {
+      if (!except.includes(h.id) && Math.abs(d) < HW + hw + 6 && s > -20 && s < h.len + 20) hit = true;
+    });
+    return hit;
+  });
+}
+
 /** Ramps that would run into another highway, the Ring or another ramp are left out. */
 function makeRamps(): CurveRoad[] {
   const kept: CurveRoad[] = [];
   for (const r of rampCandidates()) {
     const mid = r.pts.slice(2, -2);
-    const hitsHighway = mid.some(([x, z]) =>
-      HIGHWAYS.some((h) => {
-        if (h.id === r.from || h.id === r.to) return false;
-        const q = highwayCoords(h, x, z);
-        return Math.abs(q.d) < HW + RAMP_HW + 6 && q.s > -20 && q.s < h.len + 20;
-      }),
-    );
+    const hitsHighway = hitsOtherHighway(mid, RAMP_HW, [r.from, r.to]);
     const hitsRing = mid.some(([x, z]) => hexDistance(x, z) > RING_APOTHEM - RING_CORNER * 0.2 - 40);
     // Gentle enough to drive at speed, and clear of the bridge (pillars, abutments).
-    const cr = CROSSINGS.find((k) => k.upper === r.from && k.lower === r.to)!;
+    const cr = CROSSINGS.find((k) => k.upper === r.from && k.lower === r.to && Math.hypot(k.x - r.pts[0][0], k.z - r.pts[0][1]) < 900)!;
     const tooClose = r.pts.some(([x, z]) => Math.hypot(x - cr.x, z - cr.z) < (HW + 11) / cr.sin + 40);
     const tooTight = tightestRadius(r.pts) < 45;
     if (tooClose || tooTight) continue;
@@ -428,8 +699,110 @@ function makeRamps(): CurveRoad[] {
   return kept;
 }
 export const RAMPS: CurveRoad[] = makeRamps();
-/** Every curved road: the ramps and the Ring. */
-export const CURVES: CurveRoad[] = [...RAMPS, RING];
+
+// ---------------------------------------------------------------- the town
+
+/**
+ * Maple Falls: a little New England town in the autumn woods, just off a highway. A
+ * loop road leaves the highway, runs along Main Street in front of the town green and
+ * comes back on again. Positions in the town are given along the highway (`a`) and
+ * away from it (`b`), from the spot it's built off.
+ */
+export interface Town {
+  x: number;
+  z: number;
+  /** Ground level of the town. */
+  level: number;
+  hw: number;
+  s: number;
+  /** Which side of the highway (+1 = left of travel). */
+  side: number;
+  /** Highway direction there. */
+  ux: number;
+  uz: number;
+  road: CurveRoad;
+}
+/** Main Street runs this far from the highway's centre line. */
+export const MAIN_ST = 175;
+/** Where the town road leaves and rejoins the highway (along it, ± from the middle). */
+const TOWN_EXIT = 470;
+
+/** A spot in town: `a` along the highway, `b` away from it. */
+export function townPoint(t: Town, a: number, b: number): Vec2 {
+  return [t.x + t.ux * a - t.uz * t.side * b, t.z + t.uz * a + t.ux * t.side * b];
+}
+
+function placeTown(): Town | null {
+  let best: { score: number; h: Highway; s: number; side: number } | null = null;
+  for (const h of HIGHWAYS) {
+    if (h.spur) continue;
+    for (let s = 1200; s < h.len - 1200; s += 50) {
+      const p = pointAt(h, s);
+      if (CROSSINGS.some((c) => (c.upper === h.id && Math.abs(c.sUpper - s) < 950) || (c.lower === h.id && Math.abs(c.sLower - s) < 950))) continue;
+      const level = Math.abs(profileAt(h, s + TOWN_EXIT) - profileAt(h, s - TOWN_EXIT));
+      if (level > 20) continue;
+      for (const side of [-1, 1]) {
+        const cx = p.x - p.uz * side * 260, cz = p.z + p.ux * side * 260;
+        const b = biomeAt(cx, cz);
+        const score = b.forest * b.autumn - level * 0.01;
+        if (score < 0.6 || (best && score <= best.score)) continue;
+        // Nothing else within reach of the town (the road along its far side included).
+        let clear = true;
+        for (const [a, bb] of [[0, 260], [-260, 200], [260, 200], [0, 520], [-300, 420], [300, 420]]) {
+          const q: Vec2 = [p.x + p.ux * a - p.uz * side * bb, p.z + p.uz * a + p.ux * side * bb];
+          forNearHighways(q[0], q[1], (o, os, od) => {
+            if (o !== h && Math.abs(od) < 200 && os > -50 && os < o.len + 50) clear = false;
+          });
+          if (hexDistance(q[0], q[1]) > RING_APOTHEM - 300) clear = false;
+        }
+        if (RAMPS.some((r) => r.pts.some(([x, z]) => Math.hypot(x - cx, z - cz) < 650))) clear = false;
+        if (clear) best = { score, h, s, side };
+      }
+    }
+  }
+  if (!best) return null;
+  const { h, s, side } = best;
+  const p = pointAt(h, s);
+  const level = (profileAt(h, s - TOWN_EXIT) + profileAt(h, s + TOWN_EXIT) + profileAt(h, s)) / 3;
+  const t: Town = { x: p.x, z: p.z, level, hw: h.id, s, side, ux: p.ux, uz: p.uz, road: null! };
+  // The road: off the highway, a gentle S out to Main Street, along it, and back.
+  const pts: Vec2[] = [], hs: number[] = [];
+  // (Points in world coordinates; the ends sit on the highway's edge, running along it.)
+  const bez = (p1: Vec2, k1: Vec2, k2: Vec2, p2: Vec2, n: number, h1: number, h2: number) => {
+    for (let i = 0; i <= n; i++) {
+      const u = i / n, m = 1 - u;
+      const a = m * m * m, b = 3 * m * m * u, c = 3 * m * u * u, d = u * u * u;
+      pts.push([a * p1[0] + b * k1[0] + c * k2[0] + d * p2[0], a * p1[1] + b * k1[1] + c * k2[1] + d * p2[1]]);
+      hs.push(lerp(h1, h2, smoothstep(0.1, 0.9, u)));
+    }
+  };
+  const edge = (ss: number, dir: number): [Vec2, Vec2] => {
+    const q = pointAt(h, ss), e = besideHighway(h, ss, side * (HW - 3));
+    return [e, [e[0] + q.ux * dir * 150, e[1] + q.uz * dir * 150]];
+  };
+  const hIn = profileAt(h, s - TOWN_EXIT), hOut = profileAt(h, s + TOWN_EXIT);
+  const MAIN_HALF = 230;
+  const [in0, in1] = edge(s - TOWN_EXIT, 1), [out0, out1] = edge(s + TOWN_EXIT, -1);
+  bez(in0, in1, townPoint(t, -MAIN_HALF - 120, MAIN_ST), townPoint(t, -MAIN_HALF, MAIN_ST), 26, hIn, level);
+  for (let i = 1; i < 18; i++) {
+    pts.push(townPoint(t, -MAIN_HALF + (2 * MAIN_HALF * i) / 18, MAIN_ST));
+    hs.push(level);
+  }
+  bez(townPoint(t, MAIN_HALF, MAIN_ST), townPoint(t, MAIN_HALF + 120, MAIN_ST), out1, out0, 26, level, hOut);
+  t.road = { kind: 'town', pts, hs, hw: TOWN_HW, closed: false, from: h.id, to: h.id, ...bbox(pts) };
+  return t;
+}
+export const TOWN: Town | null = placeTown();
+
+/** Every curved road: the ramps, the town road and the Ring. */
+export const CURVES: CurveRoad[] = [...RAMPS, ...(TOWN ? [TOWN.road] : []), RING];
+
+/** Where a spot is relative to the town: along the highway, and away from it. */
+export function townCoords(x: number, z: number) {
+  if (!TOWN) return null;
+  const dx = x - TOWN.x, dz = z - TOWN.z;
+  return { a: dx * TOWN.ux + dz * TOWN.uz, b: (-dx * TOWN.uz + dz * TOWN.ux) * TOWN.side };
+}
 
 // Curve segments bucketed for fast point queries.
 const RB = 128;
@@ -451,7 +824,7 @@ CURVES.forEach((c, ci) => {
 });
 
 /** Nearest curved road to a point: how far from its edge, and its road height there. */
-function nearestCurve(x: number, z: number) {
+export function nearestCurve(x: number, z: number) {
   let best = Infinity, h = 0, hw = RAMP_HW, kind: CurveRoad['kind'] = 'ramp';
   for (const [ci, i] of curveBuckets.get(rbKey(Math.floor(x / RB), Math.floor(z / RB))) ?? []) {
     const c = CURVES[ci];
@@ -469,10 +842,11 @@ function nearestCurve(x: number, z: number) {
 
 function nearAnyRoad(x: number, z: number, margin: number) {
   for (const h of HIGHWAYS) {
-    const { s, d } = highwayCoords(h, x, z);
-    if (s > -margin && s < h.len + margin && Math.abs(d) < HW + margin) return true;
+    if (x < h.x0 - margin - HW || x > h.x1 + margin + HW || z < h.z0 - margin - HW || z > h.z1 + margin + HW) continue;
+    for (const [px, pz] of h.pts) if (Math.abs(px - x) < HW + margin && Math.abs(pz - z) < HW + margin && Math.hypot(px - x, pz - z) < HW + margin) return true;
   }
-  for (const c of RAMPS) if (x > c.x0 - margin && x < c.x1 + margin && z > c.z0 - margin && z < c.z1 + margin) return true;
+  for (const c of CURVES) if (c.kind !== 'ring' && x > c.x0 - margin && x < c.x1 + margin && z > c.z0 - margin && z < c.z1 + margin) return true;
+  if (TOWN && Math.hypot(x - TOWN.x, z - TOWN.z) < margin + 600) return true;
   return hexDistance(x, z) > RING_APOTHEM - HW - margin;
 }
 
@@ -483,6 +857,7 @@ function makeLakes(): OuterLake[] {
     const x = lerp(OUTER.x0 + 600, OUTER.x1 - 600, rng()), z = lerp(OUTER.z0 + 600, OUTER.z1 - 600, rng());
     const r = lerp(80, 200, rng());
     if (outsideWorld(x, z) < r + 400) continue;
+    if (mountainWeight(x, z) > 0.1) continue; // (no lakes up among the peaks)
     if (nearAnyRoad(x, z, r + 150)) continue;
     if (CROSSINGS.some((c) => Math.hypot(c.x - x, c.z - z) < r + 700)) continue;
     if (out.some((l) => Math.hypot(l.x - x, l.z - z) < l.r + r + 300)) continue;
@@ -501,12 +876,16 @@ function makeTowers(): Tower[] {
     let side = h.id % 2 ? 1 : -1;
     for (let s = 450; s < h.len - 300; s += 900) {
       side = -side;
-      const x = h.ax + h.ux * s - h.uz * side * 80, z = h.az + h.uz * s + h.ux * side * 80;
+      const [x, z] = besideHighway(h, s, side * 80);
       if (outsideWorld(x, z) < 300) continue;
       if (CROSSINGS.some((c) => Math.hypot(c.x - x, c.z - z) < 420)) continue;
       if (OUTER_LAKES.some((l) => Math.hypot(l.x - x, l.z - z) < l.r + 60)) continue;
-      if (HIGHWAYS.some((o) => o !== h && Math.abs(highwayCoords(o, x, z).d) < HW + 50 && highwayCoords(o, x, z).s > -50 && highwayCoords(o, x, z).s < o.len + 50)) continue;
-      if (nearestCurve(x, z).edge < 50) continue;
+      let near = false;
+      forNearHighways(x, z, (o, os, od) => {
+        if (o !== h && Math.abs(od) < HW + 50 && os > -50 && os < o.len + 50) near = true;
+      });
+      if (near || nearestCurve(x, z).edge < 50) continue;
+      if (TOWN && Math.hypot(x - TOWN.x, z - TOWN.z) < 800) continue;
       out.push({ x, z, h: 62 + ((s * 7) % 23) });
     }
   }
@@ -530,10 +909,11 @@ export function bridgeSolids(cr: Crossing): Solid[] {
   const ground = profileAt(L, cr.sLower);
   // Long enough to reach past where the ground (sampled every 8 m) dips towards the lower road.
   const half = (HW + 11) / cr.sin + 14;
-  const heading = Math.atan2(U.ux, U.uz);
+  const { ux, uz } = pointAt(U, cr.sUpper);
+  const heading = Math.atan2(ux, uz);
   const out: Solid[] = [];
   const add = (along: number, across: number, y: number, sx: number, sy: number, sz: number, color: number, kind: Solid['kind']) =>
-    out.push({ at: [cr.x + U.ux * along - U.uz * across, y, cr.z + U.uz * along + U.ux * across], size: [sx, sy, sz], heading, kind, color });
+    out.push({ at: [cr.x + ux * along - uz * across, y, cr.z + uz * along + ux * across], size: [sx, sy, sz], heading, kind, color });
   add(0, 0, top - 0.6, HW * 2 + 2, 1.2, half * 2, 0xa7a49c, 'ground');
   for (const side of [-1, 1]) add(0, side * (HW + 0.6), top + 0.55, 0.6, 1.1, half * 2, 0xc9c5bc, 'building');
   for (const s of [-1, 1]) {
@@ -554,10 +934,11 @@ export function outerLakeAt(x: number, z: number): OuterLake | null {
 
 /** Which highway-country road (if any) is under a point. */
 export function outerRoadAt(x: number, z: number): 'highway' | 'ramp' | null {
-  for (const h of HIGHWAYS) {
-    const { s, d } = highwayCoords(h, x, z);
-    if (Math.abs(d) <= HW && s >= -2 && s <= h.len + 2) return 'highway';
-  }
+  let on = false;
+  forNearHighways(x, z, (h, s, d) => {
+    if (Math.abs(d) <= HW && s >= -2 && s <= h.len + 2) on = true;
+  });
+  if (on) return 'highway';
   const c = nearestCurve(x, z);
   return c.edge <= 0 ? (c.kind === 'ring' ? 'highway' : 'ramp') : null;
 }
@@ -574,6 +955,12 @@ export function shapeOuter(x: number, z: number, h: number) {
     if (Math.abs(dx) > 700 || Math.abs(dz) > 700) continue;
     h = lerp(h, c.h0, 1 - smoothstep(200, 400, Math.hypot(dx, dz)));
   }
+  // The town sits on level ground.
+  const tc = townCoords(x, z);
+  if (tc && TOWN) {
+    const out = Math.hypot(Math.max(0, Math.abs(tc.a) - 280), Math.max(0, 95 - tc.b, tc.b - 370));
+    if (out < 160) h = lerp(h, TOWN.level, 1 - smoothstep(0, 160, out));
+  }
   // Lakes: a basin below the water, a dry bank round it.
   for (const l of OUTER_LAKES) {
     const dx = x - l.x, dz = z - l.z;
@@ -584,14 +971,13 @@ export function shapeOuter(x: number, z: number, h: number) {
     else h = lerp(l.level + 1.2 * smoothstep(l.r, l.r + 12, d), h, smoothstep(l.r + 8, l.r + 110, d));
   }
   // Roads: each pulls the ground towards its own height, the strongest pull winning.
-  // In the desert the cuttings are steep rock walls (canyons), elsewhere gentle slopes.
-  const steep = desertWeight(x, z);
+  // In the desert and the mountains the cuttings are steep rock walls, elsewhere gentle slopes.
+  const steep = Math.min(1, desertWeight(x, z) + mountainWeight(x, z) * 0.8);
   const reach = HW + 45 - 30 * steep;
   const pulls: [number, number][] = [];
-  for (const hw of HIGHWAYS) {
-    const { s, d } = highwayCoords(hw, x, z);
+  forNearHighways(x, z, (hw, s, d) => {
     const ad = Math.abs(d);
-    if (ad > reach + 1 || s < -60 || s > hw.len + 60) continue;
+    if (ad > reach + 1 || s < -60 || s > hw.len + 60) return;
     let w = 1 - smoothstep(HW + 3, reach, ad);
     if (s < 0 || s > hw.len) w *= 1 - smoothstep(0, 60, s < 0 ? -s : s - hw.len);
     // Under a bridge the lower highway's ground wins (the deck spans the gap).
@@ -600,7 +986,7 @@ export function shapeOuter(x: number, z: number, h: number) {
       if (Math.abs(highwayCoords(HIGHWAYS[c.lower], x, z).d) < HW + 11) w = 0;
     }
     if (w > 0) pulls.push([w, profileAt(hw, s)]);
-  }
+  });
   const c = nearestCurve(x, z);
   if (c.edge < 32) pulls.push([(1 - smoothstep(2, 32, c.edge)) * (c.kind === 'ring' ? 1 : 0.999), c.h]);
   pulls.sort((a, b) => a[0] - b[0]);

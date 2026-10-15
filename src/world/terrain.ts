@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Physics, RAPIER } from '../physics/Physics';
 import { HARBOR, LAKE, TERRAIN_CELL, WATER_LEVEL, WORLD, HARBOR_X, RIVER, heightAt, surfaceAt } from './layout';
-import { desertWeight } from './biomes';
+import { biomeAt } from './biomes';
 import { StaticBatch, TILE } from './batch';
 import { valueNoise } from '../util/math';
 import type { Surface } from '../physics/surfaces';
@@ -41,6 +41,7 @@ const GROUND_COLORS: Record<Surface, [number, number, number]> = {
   concrete: [0.52, 0.52, 0.5],
   dirt: [0.63, 0.47, 0.31],
   sand: [0.85, 0.77, 0.56],
+  snow: [0.9, 0.92, 0.95],
   water: [0.45, 0.5, 0.38],
   asphalt: [0.3, 0.3, 0.32],
 };
@@ -52,16 +53,16 @@ const ROCK = [0.46, 0.41, 0.36];
  * vertex colours (steep slopes show bare rock). `h(c, r)` gives the height at a grid
  * point and may be asked for points one cell outside the patch (for slopes).
  */
-export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: (c: number, r: number) => number, withBiomes = false) {
-  const pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [], desert: number[] = [];
+export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: (c: number, r: number) => number, withBiomes = false, surf?: (c: number, r: number) => Surface) {
+  const pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [], biome: number[] = [], extra: number[] = [];
   for (let r = 0; r <= nr; r++)
     for (let c = 0; c <= nc; c++) {
       const x = x0 + c * TERRAIN_CELL, z = z0 + r * TERRAIN_CELL;
       const y = h(c, r);
       pos.push(x, y, z);
       uv.push(x / 24, z / 24);
-      let s = surfaceAt(x, z);
-      if (s === 'asphalt') s = 'concrete';
+      const s0 = surf ? surf(c, r) : surfaceAt(x, z);
+      const s = s0 === 'asphalt' ? 'concrete' : s0;
       const base = GROUND_COLORS[s];
       const n = 0.88 + 0.24 * valueNoise(x / 40, z / 40);
       // Hills get a little lighter on top.
@@ -71,10 +72,18 @@ export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: 
       const rock = s === 'grass' || s === 'dirt' ? Math.min(1, Math.max(0, (slope - 0.45) * 2.5)) : 0;
       const rn = 0.8 + 0.3 * valueNoise(x / 9, y / 6);
       for (let k = 0; k < 3; k++) col.push((base[k] * n + (k < 2 ? lift : lift * 0.5)) * (1 - rock) + ROCK[k] * rn * rock);
-      // Desert (photo-textured by groundMaterial): how much, and how rocky (cliffs, steep slopes).
+      // Regions (photo-textured by groundMaterial): how much of each, how rocky (cliffs
+      // and steep slopes: the desert's sandstone shows soonest, grassy hills hold on
+      // longest), and how autumnal the forest is.
       if (withBiomes) {
-        const dw = surfaceAt(x, z) === 'asphalt' ? 0 : desertWeight(x, z);
-        desert.push(dw, Math.min(1, Math.max(0, (slope - 0.32) * 3.5)));
+        const b = s0 === 'asphalt' ? null : biomeAt(x, z);
+        if (!b) biome.push(0, 0, 0, 0), extra.push(0, 0);
+        else {
+          biome.push(b.desert, b.forest, b.farm, b.mountain);
+          const r = (from: number, k: number) => Math.min(1, Math.max(0, (slope - from) * k));
+          const sum = b.desert + b.forest + b.farm + b.mountain || 1;
+          extra.push((b.desert * r(0.32, 3.5) + (b.forest + b.farm) * r(0.62, 3) + b.mountain * r(0.95 + Math.max(0, y - 160) * 0.003, 2.2)) / sum, b.autumn);
+        }
       }
     }
   for (let r = 0; r < nr; r++)
@@ -86,7 +95,10 @@ export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: 
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  if (withBiomes) g.setAttribute('aDesert', new THREE.Float32BufferAttribute(desert, 2));
+  if (withBiomes) {
+    g.setAttribute('aBiome', new THREE.Float32BufferAttribute(biome, 4));
+    g.setAttribute('aExtra', new THREE.Float32BufferAttribute(extra, 2));
+  }
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;

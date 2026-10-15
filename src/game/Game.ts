@@ -22,11 +22,12 @@ import type { Prop } from '../damage/Breakable';
 import { PROP_DEFS } from '../world/propModels';
 import type { ParkedCar } from '../vehicles/ParkedCar';
 import { SURFACES } from '../physics/surfaces';
+import { mountainWeight } from '../world/biomes';
 import { MAX_HEALTH } from '../damage/Damage';
 
 type State = 'loading' | 'title' | 'select' | 'drive' | 'paused' | 'wrecked' | 'sinking';
 
-const DUST_COLORS = { dust: 0xb8946a, grass: 0x8a7a50, spray: 0xd8eeff, none: 0 } as const;
+const DUST_COLORS = { dust: 0xb8946a, grass: 0x8a7a50, snow: 0xf4f8ff, spray: 0xd8eeff, none: 0 } as const;
 const UNDERWATER_COLOR = 0x0d5a86;
 const SINK_SECONDS = 3.5;
 
@@ -36,6 +37,8 @@ export class Game {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(72, 1, 0.08, 900);
+  /** 0..1: how far the fog has thinned out for the mountains. */
+  private clearAir = 0;
   private physics!: Physics;
   private world!: World;
   private particles = new Particles();
@@ -292,6 +295,13 @@ export class Game {
     const focus = this.car && this.state !== 'title' ? this.car.model.root.position : this.camera.position;
     this.sun.target.position.copy(focus);
     this.sun.position.copy(focus).addScaledVector(SUN_DIR, 200);
+    // Clearer air up in the mountains, so the peaks show from further off.
+    if (this.state !== 'sinking') {
+      this.clearAir += (mountainWeight(this.camera.position.x, this.camera.position.z) - this.clearAir) * Math.min(1, dt * 0.5);
+      const fog = this.scene.fog as THREE.Fog;
+      fog.near = 160 + 90 * this.clearAir;
+      fog.far = 680 + 200 * this.clearAir;
+    }
 
     switch (this.state) {
       case 'title':
