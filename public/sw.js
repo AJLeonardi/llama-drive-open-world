@@ -1,6 +1,6 @@
 // Offline support: network-first for the page (so updates arrive when online),
 // cache-first for everything else (Vite asset names are content-hashed).
-const CACHE = 'crash-city-v1';
+const CACHE = 'llama-drive-v1';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html'])));

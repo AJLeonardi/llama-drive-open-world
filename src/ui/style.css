@@ -213,6 +213,23 @@ h1 {
   color: #ffd400;
   text-shadow: 0 5px 0 #c4440f, 0 10px 24px rgba(0, 0, 0, 0.5);
 }
+.subtitle {
+  margin: -10px 0 18px;
+  font-size: max(20px, calc(var(--u) * 5));
+  font-weight: 900;
+  letter-spacing: 8px;
+  color: #ffffff;
+  text-shadow: 0 3px 0 #c4440f, 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+.build {
+  position: absolute;
+  right: calc(12px + var(--safe-r));
+  bottom: calc(8px + var(--safe-b));
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.6;
+}
+
 h2 {
   margin: 0 0 18px;
   font-size: max(30px, calc(var(--u) * 8));

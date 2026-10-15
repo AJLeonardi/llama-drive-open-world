@@ -1,4 +1,4 @@
-# Crash City
+# Llama Drive: Open World
 
 An open-world driving and crashing game for kids, built for an iPad (landscape) as a web app.
 Pick a car, drive between a Boston-ish city and a New York-ish city on the highway, smash

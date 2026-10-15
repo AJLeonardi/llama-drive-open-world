@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Crash City: a three.js + Rapier (WASM) web game (PWA) for two 7-year-olds, played in landscape on a
+Llama Drive: Open World — a three.js + Rapier (WASM) web game (PWA) for two 7-year-olds, played in landscape on a
 **2017 iPad Pro 10.5" (A10X, iPadOS 17 max — WebGL2, no WebGPU)** and an iPhone. Everything visual and
 audible is generated in code: no model, texture or audio files. The visual quality bar is high (PBR
 paint, shadows, sculpted cars), but it must still run on the A10X. Content rules: no gore, and no

@@ -130,7 +130,7 @@ export function buildDirtTrack(batch: StaticBatch, physics: Physics, scene: THRE
     const c = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(0.4, 3.5, 0.4).setTranslation(ax, 3.5, az + dz));
     physics.setOwner(c, { kind: 'building', material: 'metal' });
   }
-  const banner = twoSidedSign(textPanel(['CRASH CITY SPEEDWAY'], '#111111', '#ffd400', 1024, 160), tw + 2, 2.6);
+  const banner = twoSidedSign(textPanel(['LLAMA DRIVE SPEEDWAY'], '#111111', '#ffd400', 1024, 160), tw + 2, 2.6);
   banner.position.set(ax, 6.4, az);
   banner.rotation.y = Math.PI / 2;
   scene.add(banner);

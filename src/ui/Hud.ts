@@ -88,8 +88,10 @@ export class Hud {
 
     const title = this.add('title', `
       <div class="screen dim">
-        <h1>CRASH CITY</h1>
+        <h1>LLAMA DRIVE</h1>
+        <div class="subtitle">OPEN WORLD</div>
         <button class="big">▶ PLAY</button>
+        <div class="build">Build ${__BUILD_NUMBER__}</div>
       </div>`);
     tap(title.querySelector('.big'), cb.play);
 
