@@ -229,7 +229,7 @@ export class Game {
     else this.tracker = new ImpactTracker(this.physics, this.car.sim.collider);
     this.audio.setCar(this.car.spec.engine);
     this.audio.chime();
-    this.cameras.reset('cockpit');
+    this.cameras.reset('chase');
     this.controls.reset();
     this.acc = 0;
     this.upsideTimer = 0;

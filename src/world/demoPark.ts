@@ -100,7 +100,10 @@ export function buildDemoPark(batch: StaticBatch, physics: Physics, scene: THREE
     props.push({ kind: 'domino', x, y: 0, z: Z(622 - Math.sin(i * 0.25) * 6), rot: Math.cos(i * 0.25) * 0.25 });
   }
 
-  // Exploding barrels: pyramids, a big one by the dominoes, and a "minefield" row.
+  // Exploding barrels: two big pyramids just inside the gate, more pyramids around the
+  // park (a big one by the dominoes), and a "minefield" row across the middle.
+  tntPyramid(props, X(578), Z(322), 5, 0);
+  tntPyramid(props, X(710), Z(345), 5, 0);
   tntPyramid(props, X(560), Z(395), 4, 0);
   tntPyramid(props, X(470), Z(500), 3, Math.PI / 2);
   tntPyramid(props, X(700), Z(598), 5, 0);

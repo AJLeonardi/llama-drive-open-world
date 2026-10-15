@@ -3,7 +3,8 @@ import { Physics, RAPIER } from '../physics/Physics';
 import type { Vehicle } from '../vehicles/Vehicle';
 
 export type CameraMode = 'cockpit' | 'chase' | 'orbit';
-export const CAMERA_MODES: CameraMode[] = ['cockpit', 'chase', 'orbit'];
+/** Views the camera button cycles through while driving. Orbit is only for looking at a wreck. */
+export const CAMERA_MODES: CameraMode[] = ['chase', 'cockpit'];
 
 const v = new THREE.Vector3();
 const target = new THREE.Vector3();
@@ -14,7 +15,7 @@ const flip = new THREE.Quaternion()
   .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.07));
 
 export class Cameras {
-  mode: CameraMode = 'cockpit';
+  mode: CameraMode = 'chase';
   private orbitAngle = 0;
   /** Extra yaw for the chase camera from swiping; eases back behind the car after a pause. */
   private chaseYaw = 0;
@@ -31,7 +32,7 @@ export class Cameras {
     this.initialized = false;
   }
 
-  reset(mode: CameraMode = 'cockpit') {
+  reset(mode: CameraMode = 'chase') {
     this.mode = mode;
     this.chaseYaw = 0;
     this.initialized = false;
