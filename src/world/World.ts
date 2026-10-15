@@ -16,9 +16,10 @@ import { buildMountain } from './mountain';
 import { buildCityStunts } from './cityStunts';
 import { OuterWorld } from './OuterWorld';
 import { groundMaterial } from './groundMaterial';
+import { roadMaterial } from './roadMaterial';
 import type { PropSpawn } from './propModels';
 import type { ParkedSpawn } from './streetLife';
-import { boostTexture, dirtRoadTexture, plainAsphaltTexture, groundTexture, roadTexture, sidewalkTexture, storefrontTexture, windowTexture, WindowStyle } from '../util/textures';
+import { boostTexture, dirtRoadTexture, groundTexture, roadTexture, sidewalkTexture, storefrontTexture, windowTexture, WindowStyle } from '../util/textures';
 import type { RoadKind } from './layout';
 import { pointInRect } from '../util/math';
 
@@ -29,10 +30,10 @@ function materials(): Record<string, THREE.Material> {
   const road = (map: THREE.Texture) =>
     new THREE.MeshLambertMaterial({ map, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const lanes: Record<RoadKind, THREE.Texture> = {
-    highway: roadTexture(6, true),
-    avenue: roadTexture(4),
-    street: roadTexture(2),
-    ramp: roadTexture(1), // like a real exit ramp: white edge lines, no centre line
+    highway: roadTexture(6, true, true),
+    avenue: roadTexture(4, false, true),
+    street: roadTexture(2, false, true),
+    ramp: roadTexture(1, false, true), // like a real exit ramp: white edge lines, no centre line
     dirt: dirtRoadTexture(),
   };
   const out: Record<string, THREE.Material> = {
@@ -45,9 +46,10 @@ function materials(): Record<string, THREE.Material> {
     store: new THREE.MeshStandardMaterial({ map: storefrontTexture(), roughness: 0.5, metalness: 0.1 }),
     boost: new THREE.MeshBasicMaterial({ map: boostTexture(), polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, depthWrite: false }),
   };
-  for (const k of Object.keys(lanes) as RoadKind[]) out[roadMaterialKey(k)] = road(lanes[k]);
+  // Asphalt roads: the photo asphalt with their markings on top (dirt stays as it was).
+  for (const k of Object.keys(lanes) as RoadKind[]) out[roadMaterialKey(k)] = k === 'dirt' ? road(lanes[k]) : roadMaterial(lanes[k]);
   // Junctions: plain asphalt patches and white markings, drawn over the roads.
-  out['road-plain'] = road(plainAsphaltTexture());
+  out['road-plain'] = roadMaterial(null);
   out['road-marks'] = new THREE.MeshLambertMaterial({ color: 0xeeeeee, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 });
   // Buildings and objects cast shadows; ground, roads and sidewalks only receive them.
   for (const k of ['plain', 'loop', 'store']) out[k].userData.castShadow = true;

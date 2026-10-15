@@ -100,11 +100,17 @@ export const concreteTexture = () =>
  * Road texture: u runs across the road (0..1), v along it (repeats every 16 m).
  * Lane markings are drawn for `lanes` lanes (0 = none, e.g. dirt).
  */
-export const roadTexture = (lanes: number, highway = false) =>
-  canvasTex(`road-${lanes}-${highway}`, 512, (g, s) => {
-    g.fillStyle = '#4a4c51';
-    g.fillRect(0, 0, s, s);
-    speckle(g, s, 5, ['#45474b', '#54565b', '#3e4044', '#5c5e63'], 9000, [1, 3]);
+/**
+ * Lane markings and tyre wear for a road. With `overlay`, only those on a see-through
+ * background (the asphalt itself comes from a photo, see roadMaterial.ts).
+ */
+export const roadTexture = (lanes: number, highway = false, overlay = false) =>
+  canvasTex(`road-${lanes}-${highway}-${overlay}`, 512, (g, s) => {
+    if (!overlay) {
+      g.fillStyle = '#4a4c51';
+      g.fillRect(0, 0, s, s);
+      speckle(g, s, 5, ['#45474b', '#54565b', '#3e4044', '#5c5e63'], 9000, [1, 3]);
+    }
     // tire wear in each lane + a few patch repairs
     const r = mulberry32(lanes * 31);
     for (let i = 0; i < Math.max(lanes, 2); i++) {
@@ -133,15 +139,6 @@ export const roadTexture = (lanes: number, highway = false) =>
         g.fillRect(x - 3, 0, 6, s * 0.45);
       }
     }
-  });
-
-/** Plain asphalt for junction patches: same grain as the roads, no wear lines or markings. */
-export const plainAsphaltTexture = () =>
-  canvasTex('asphalt-plain', 512, (g, s) => {
-    // A shade lighter than the roads' base: they look lighter overall thanks to their lines.
-    g.fillStyle = '#525459';
-    g.fillRect(0, 0, s, s);
-    speckle(g, s, 5, ['#4c4e53', '#5b5d62', '#46484c', '#64666b'], 9000, [1, 3]);
   });
 
 export const dirtRoadTexture = () =>
