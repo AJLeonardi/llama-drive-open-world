@@ -22,7 +22,7 @@ npm run build                       # typecheck + vite build → dist/ (deployed
 node scripts/make-icons.mjs         # regenerate public/icon-*.png
 ```
 
-Debug mode is **on by default** for now (device testing); `?debug=0` turns it off. It shows an
+`?debug` in the URL turns on debug mode. It shows an
 FPS/draw-call/triangle overlay, logs `[crash]` impacts and `[perf]` world build time, and exposes
 `window.__game` for poking at the running game from the console. The title screen shows the build number (git commit count, injected in `vite.config.ts`; CI fetches full history for it).
 

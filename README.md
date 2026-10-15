@@ -32,7 +32,7 @@ npm test           # physics, damage, layout and loop tests (headless)
 npm run build      # typecheck + production build into dist/
 ```
 
-The FPS / draw-call overlay and crash logging are **on by default** for now (device testing). Add `?debug=0` to the URL to hide them.
+Add `?debug` to the URL for an FPS / draw-call overlay and crash logging.
 
 ## Put it on the iPad
 

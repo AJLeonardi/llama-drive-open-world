@@ -66,8 +66,8 @@ export class Game {
   private sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
   /** 2 = sharp shadows, 1 = softer/smaller shadow map, 0 = no shadows (slow devices). */
   private shadowTier = 1;
-  // Debug overlay is ON by default while we test on different devices; add ?debug=0 to hide it.
-  private readonly debug = new URLSearchParams(location.search).get('debug') !== '0';
+  // Debug overlay (FPS, crash log, window.__game) only with ?debug in the URL.
+  private readonly debug = new URLSearchParams(location.search).has('debug');
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
