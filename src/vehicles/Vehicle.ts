@@ -236,9 +236,13 @@ export class Vehicle {
     }
   }
 
-  /** Cockpit view hides the roof and pillars to show more of the world. */
+  /** Cockpit view hides the roof and pillars to show more of the world (and clears tinted windows). */
   setCockpitView(on: boolean) {
-    for (const p of this.model.parts) if (COCKPIT_HIDDEN.has(p.name) && !p.detached) p.mesh.visible = !on;
+    const mats = carMaterials();
+    for (const p of this.model.parts) {
+      if (COCKPIT_HIDDEN.has(p.name) && !p.detached) p.mesh.visible = !on;
+      if (this.model.tintedGlass && p.kind === 'glass' && !p.cracked) p.mesh.material = on ? mats.glass : mats.glassTinted;
+    }
   }
 
   /** World position of the smoke outlet. */

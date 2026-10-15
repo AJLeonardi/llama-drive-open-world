@@ -38,12 +38,14 @@ export interface CarModel {
   steeringWheel: THREE.Object3D;
   /** Where engine smoke comes out (car local). */
   smokePoint: THREE.Vector3;
+  /** Outside views show solid tinted windows instead of see-through glass (cockpit view stays clear). */
+  tintedGlass?: boolean;
 }
 
 /** Parts hidden while driving from the cockpit so the roof doesn't block the view. */
 export const COCKPIT_HIDDEN = new Set(['roof', 'pillars']);
 
-let shared: (Record<Finish, THREE.Material> & { glassCracked: THREE.Material }) | null = null;
+let shared: (Record<Finish, THREE.Material> & { glassCracked: THREE.Material; glassTinted: THREE.Material }) | null = null;
 
 /** Shared car materials (PBR, so paint and chrome pick up reflections from the sky). */
 export function carMaterials() {
@@ -64,6 +66,10 @@ export function carMaterials() {
         // Nearly clear: easy to see through from the cockpit, faint reflections show it's glass.
         color: 0xd4e2ec, metalness: 0.0, roughness: 0.05, transparent: true, opacity: 0.12,
         side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 0.5,
+      }),
+      glassTinted: new THREE.MeshStandardMaterial({
+        // Solid dark tint for outside views: reads as windows without showing the cabin.
+        color: 0x1a232c, metalness: 0.1, roughness: 0.06, side: THREE.DoubleSide, envMapIntensity: 1.3,
       }),
       glassCracked: new THREE.MeshStandardMaterial({
         color: 0xe8f0f4, map: crackTexture(), metalness: 0, roughness: 0.3, transparent: true, opacity: 0.88,
@@ -147,7 +153,7 @@ export class ModelBuilder {
     return g;
   }
 
-  build(smokePoint: THREE.Vector3): CarModel {
-    return { root: this.root, parts: this.parts, wheels: this.wheels, steeringWheel: this.steeringWheel, smokePoint };
+  build(smokePoint: THREE.Vector3, opts: { tintedGlass?: boolean } = {}): CarModel {
+    return { root: this.root, parts: this.parts, wheels: this.wheels, steeringWheel: this.steeringWheel, smokePoint, ...opts };
   }
 }

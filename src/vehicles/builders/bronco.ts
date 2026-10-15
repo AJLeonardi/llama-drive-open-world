@@ -128,6 +128,6 @@ export function buildBronco(): CarModel {
   for (const [x, z] of [[s.track / 2, az], [-s.track / 2, az], [s.track / 2, -az], [-s.track / 2, -az]])
     m.wheel([x, s.wheelRadius, z], pieces, x < 0);
 
-  return m.build(new THREE.Vector3(0, 1.3, 1.9));
+  return m.build(new THREE.Vector3(0, 1.3, 1.9), { tintedGlass: true });
 }
 
