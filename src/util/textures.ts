@@ -370,3 +370,91 @@ export const sidewalkTexture = () =>
     g.fillStyle = '#d8d5ce';
     g.fillRect(0, 0, 14, s);
   });
+
+/**
+ * Wall damage decals, 512px, transparent background.
+ * stage 0 = cracks, 1 = heavy cracks + chipped chunks, 2 = smashed hole.
+ * `glass` draws a shattered-pane look instead.
+ */
+export const wallDamageTexture = (stage: 0 | 1 | 2, glass: boolean) =>
+  canvasTex(
+    `wall-dmg-${stage}-${glass}`,
+    512,
+    (g, s) => {
+      g.clearRect(0, 0, s, s);
+      const r = mulberry32(31 + stage * 7 + (glass ? 100 : 0));
+      const c = s / 2;
+      const crack = (x: number, y: number, ang: number, len: number, w: number, depth: number) => {
+        g.lineWidth = w;
+        g.beginPath();
+        g.moveTo(x, y);
+        let a = ang;
+        for (let d = 0; d < len; d += 10) {
+          a += (r() - 0.5) * 0.6;
+          x += Math.cos(a) * 10;
+          y += Math.sin(a) * 10;
+          g.lineTo(x, y);
+          if (depth > 0 && r() < 0.12) {
+            g.stroke();
+            crack(x, y, a + (r() < 0.5 ? 0.8 : -0.8), len * 0.4, Math.max(1, w * 0.6), depth - 1);
+            g.lineWidth = w;
+            g.beginPath();
+            g.moveTo(x, y);
+          }
+        }
+        g.stroke();
+      };
+      const holeR = stage === 2 ? s * 0.2 : stage === 1 ? s * 0.07 : 0;
+      if (glass) {
+        // Shattered pane: frosted area, radial + ring cracks, a hole in the middle when smashed.
+        const grd = g.createRadialGradient(c, c, 0, c, c, s / 2);
+        grd.addColorStop(0, 'rgba(235,245,255,0.75)');
+        grd.addColorStop(0.6, 'rgba(220,235,250,0.35)');
+        grd.addColorStop(1, 'rgba(220,235,250,0)');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, s, s);
+        g.strokeStyle = 'rgba(255,255,255,0.95)';
+        const spokes = 14 + stage * 6;
+        for (let i = 0; i < spokes; i++) crack(c, c, (i / spokes) * Math.PI * 2, s * (0.3 + stage * 0.08), 2.5, 1);
+        for (let k = 1; k <= 3 + stage; k++) {
+          g.lineWidth = 1.5;
+          g.beginPath();
+          g.arc(c, c, k * s * 0.06 + r() * 8, 0, Math.PI * 2);
+          g.stroke();
+        }
+      } else {
+        g.strokeStyle = 'rgba(25,22,20,0.95)';
+        const n = 7 + stage * 5;
+        for (let i = 0; i < n; i++) crack(c, c, (i / n) * Math.PI * 2 + r() * 0.4, s * (0.22 + stage * 0.1), 4 + stage, 2);
+        if (stage >= 1) {
+          // Chipped-off chunks showing darker material underneath
+          for (let i = 0; i < 10 + stage * 8; i++) {
+            const a = r() * Math.PI * 2, d = holeR + r() * s * 0.18;
+            g.fillStyle = `rgba(${60 + r() * 40},${55 + r() * 35},${50 + r() * 30},0.9)`;
+            g.beginPath();
+            const x = c + Math.cos(a) * d, y = c + Math.sin(a) * d, k = 6 + r() * 16;
+            g.moveTo(x, y);
+            for (let j = 0; j < 5; j++) g.lineTo(x + (r() - 0.5) * k * 2, y + (r() - 0.5) * k * 2);
+            g.fill();
+          }
+        }
+      }
+      if (holeR > 0) {
+        // Jagged hole: dark interior with a lighter broken rim.
+        g.beginPath();
+        for (let i = 0; i <= 24; i++) {
+          const a = (i / 24) * Math.PI * 2, rr = holeR * (0.75 + r() * 0.45);
+          const x = c + Math.cos(a) * rr, y = c + Math.sin(a) * rr;
+          if (i) g.lineTo(x, y);
+          else g.moveTo(x, y);
+        }
+        g.closePath();
+        g.fillStyle = glass ? 'rgba(20,28,38,0.95)' : 'rgba(18,16,15,0.97)';
+        g.fill();
+        g.lineWidth = 6;
+        g.strokeStyle = glass ? 'rgba(255,255,255,0.9)' : 'rgba(150,140,130,0.9)';
+        g.stroke();
+      }
+    },
+    false,
+  );

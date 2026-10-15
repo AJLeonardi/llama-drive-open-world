@@ -11,7 +11,7 @@ import type { Handicap } from '../vehicles/VehicleSim';
 export const IMPACT_WINDOW = 0.08;
 /** Velocity change (m/s) the car can absorb without damage (curbs, nudges, landings). */
 export const CAR_DV_THRESHOLD = 2.5;
-const CAR_DAMAGE_PER_DV = 1.45;
+const CAR_DAMAGE_PER_DV = 2.4;
 /** Reference mass for "big car hits harder" scaling. */
 const REF_MASS = 2000;
 
@@ -38,10 +38,12 @@ export function objectDamage(impulse: number, carMass: number, toughness: number
 /** Health only ever goes down during a run. */
 export const applyDamage = (health: number, damage: number) => Math.max(0, health - Math.max(0, damage));
 
-/** How far (m) a panel gets pushed in by a crash with this velocity change. */
-export const dentDepth = (dv: number) => Math.min(0.42, 0.028 * Math.max(0, dv - 1.5));
+/** How far (m) a panel gets pushed in by a crash with this velocity change (big hits crush ~1 m). */
+export const dentDepth = (dv: number) => Math.min(1.1, 0.045 * Math.max(0, dv - 1.5));
 /** How wide (m) the dent spreads. */
-export const dentRadius = (dv: number) => 0.45 + Math.min(0.65, 0.025 * dv);
+export const dentRadius = (dv: number) => 0.55 + Math.min(1.7, 0.05 * dv);
+/** Most a single vertex can be pushed from its original spot, by part kind. */
+export const MAX_CRUSH = { body: 1.1, panel: 0.8 };
 
 export type DamageStage = 0 | 1 | 2 | 3 | 4;
 /** 0 healthy, 1 >25% damaged, 2 >50%, 3 >75%, 4 wrecked */
@@ -71,8 +73,11 @@ export const misfireChancePerSecond = (health: number) => (damageStage(health) =
 
 /** Per-part thresholds (accumulated local damage) for visible part failures. */
 export const PART_LIMITS = {
-  glassCrack: 6,
-  glassShatter: 26,
-  detach: 22,
-  wheelWobble: 30,
+  glassCrack: 4,
+  glassShatter: 16,
+  detach: 14,
+  wheelWobble: 20,
 };
+
+/** Impulse (N·s, from a 2000 kg car) that wrecks a building's "health" (it never falls down). */
+export const BUILDING_TOUGHNESS = 110000;

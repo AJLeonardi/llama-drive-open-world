@@ -19,6 +19,10 @@ export interface EngineSound {
   wind: number;
   /** Overall loudness trim. */
   volume: number;
+  /** Pitch multiplier on the synthesized engine (1 = true firing frequency). */
+  pitch: number;
+  /** Low-octave weight (0..1): more = deeper, fuller engine. */
+  body: number;
 }
 
 export interface VehicleSpec {
@@ -79,7 +83,7 @@ export const SPECS: Record<CarId, VehicleSpec> = {
     eye: { x: 0.4, y: 1.56, z: 0.3 },
     engine: {
       cylinders: 6, idleRpm: 700, redlineRpm: 6000, gears: 10, shiftTime: 0.12,
-      turbo: true, popChance: 0.05, tone: 700, roughness: 0.1, wind: 0.6, volume: 1.0,
+      turbo: true, popChance: 0.05, tone: 700, roughness: 0.1, wind: 0.6, volume: 1.0, pitch: 1, body: 0.55,
     },
   },
   lambo: {
@@ -87,26 +91,28 @@ export const SPECS: Record<CarId, VehicleSpec> = {
     name: 'Lamborghini Aventador',
     blurb: 'Super fast, not very tough',
     mass: 1600,
-    half: { x: 0.98, y: 0.44, z: 2.36 },
-    chassisY: 0.62,
+    // Collision box sits higher than the visual body's underside: the real car's
+    // tiny ground clearance made the box scrape the road at speed (phantom crashes).
+    half: { x: 0.98, y: 0.39, z: 2.36 },
+    chassisY: 0.71,
     comY: 0.38,
     wheelbase: 2.7,
     track: 1.72,
     wheelRadius: 0.36,
     wheelWidth: 0.34,
     suspensionRest: 0.18,
-    suspensionStiffness: 42,
+    suspensionStiffness: 55,
     accel: 9.5,
     topSpeed: 72, // ~160 mph
     reverseSpeed: 14,
     maxSteer: 0.55,
     grip: 1.12,
-    downforce: 2.4,
+    downforce: 1.4,
     durability: 0.85,
     eye: { x: 0.36, y: 1.04, z: -0.05 },
     engine: {
       cylinders: 12, idleRpm: 1000, redlineRpm: 8500, gears: 7, shiftTime: 0.08,
-      turbo: false, popChance: 0.7, tone: 2600, roughness: 0.02, wind: 0.4, volume: 1.0,
+      turbo: false, popChance: 0.7, tone: 1400, roughness: 0.04, wind: 0.4, volume: 1.0, pitch: 0.62, body: 0.6,
     },
   },
   wrangler: {
@@ -133,7 +139,7 @@ export const SPECS: Record<CarId, VehicleSpec> = {
     eye: { x: 0.38, y: 1.5, z: 0.1 },
     engine: {
       cylinders: 6, idleRpm: 700, redlineRpm: 6400, gears: 8, shiftTime: 0.14,
-      turbo: false, popChance: 0.12, tone: 1050, roughness: 0.2, wind: 1.0, volume: 1.0,
+      turbo: false, popChance: 0.12, tone: 1050, roughness: 0.2, wind: 1.0, volume: 1.0, pitch: 1, body: 0.55,
     },
   },
 };

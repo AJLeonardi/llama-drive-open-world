@@ -226,6 +226,7 @@ export class VehicleSim {
     // Taper toward a slightly higher figure because air drag also eats into top speed.
     const top = spec.topSpeed * 1.12 * hc.topSpeed * boost;
     let force = 0;
+    let braking = 0;
     const throttle = hc.engineCut ? 0 : input.throttle;
     const reverse = hc.engineCut ? 0 : input.reverse;
     if (throttle > 0) {
@@ -236,7 +237,8 @@ export class VehicleSim {
     }
     if (reverse > 0) {
       if (v > 1) {
-        force -= mass * 7 * reverse; // acts as a brake while still rolling forward
+        braking = reverse; // acts as a strong brake while still rolling forward
+        force -= mass * 9 * reverse;
       } else {
         const rTop = spec.reverseSpeed;
         const taper = v >= 0 ? 1 : Math.max(0, 1 - (v / rTop) ** 2);
@@ -268,6 +270,12 @@ export class VehicleSim {
     const lv = body.linvel();
     const sp = Math.hypot(lv.x, lv.y, lv.z);
     const up = this.up();
+    // Arcade brakes: tyre grip alone can't stop the car quickly, so add a direct
+    // braking force (about 1.5 g in total with the tyres) while the wheels are down.
+    if (braking > 0 && contact > 0 && sp > 0.5) {
+      const k = (mass * 7 * braking * groundFrac) / sp;
+      body.addForce({ x: -lv.x * k, y: 0, z: -lv.z * k }, true);
+    }
     // Air drag: what really limits top speed and slows coasting at high speed.
     const dragK = 0.42;
     body.addForce({ x: -lv.x * sp * dragK, y: -lv.y * sp * dragK, z: -lv.z * sp * dragK }, true);

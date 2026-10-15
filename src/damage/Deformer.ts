@@ -38,7 +38,9 @@ export function dentGeometry(
     const f = 1 - Math.sqrt(d2) / radius;
     // Crumple: jitter keyed on the *original* position so shared vertices agree.
     const key = original[o] * 73.1 + original[o + 1] * 19.7 + original[o + 2] * 41.3;
-    const amount = depth * f * f * (0.65 + 0.7 * hash(key));
+    // Wrinkle amount is limited in metres so deep crushes crumple instead of growing spikes.
+    const base = depth * f * f;
+    const amount = base + (hash(key) - 0.5) * Math.min(0.12, base * 0.5);
     tmp.set(arr[o] + dir.x * amount, arr[o + 1] + dir.y * amount, arr[o + 2] + dir.z * amount);
     // Cap total displacement from the undamaged shape.
     const ox = tmp.x - original[o], oy = tmp.y - original[o + 1], oz = tmp.z - original[o + 2];

@@ -33,7 +33,9 @@ interface EngineNodes {
   subGain: GainNode;
   intake: BiquadFilterNode;
   intakeGain: GainNode;
-  turbo: OscillatorNode | null;
+  /** Turbo spool: band-passed noise (a soft whoosh, not a whistle). */
+  turbo: AudioBufferSourceNode | null;
+  turboFilter: BiquadFilterNode | null;
   turboGain: GainNode | null;
 }
 
@@ -70,7 +72,7 @@ export class GameAudio {
       this.sfx.connect(this.master);
       this.noise = this.makeNoise();
       this.wind = this.loopNoise(this.lowpass(700), 0);
-      this.skid = this.loopNoise(this.bandpass(1100, 3), 0);
+      this.skid = this.loopNoise(this.bandpass(750, 2), 0);
     }
     if (this.ctx.state !== 'running') void this.ctx.resume();
   }
@@ -217,7 +219,7 @@ export class GameAudio {
     gain.gain.value = 0;
     const subGain = ctx.createGain();
     // Big low-revving engines get more low-end weight; the V12 stays clean.
-    subGain.gain.value = e.cylinders >= 12 ? 0.15 : 0.55;
+    subGain.gain.value = e.body;
     src.connect(shaper);
     sub.connect(subGain).connect(shaper);
     shaper.connect(filter).connect(gain).connect(this.master);
@@ -229,19 +231,21 @@ export class GameAudio {
     isrc.loop = true;
     isrc.connect(intake).connect(intakeGain).connect(this.master);
     isrc.start();
-    let turbo: OscillatorNode | null = null, turboGain: GainNode | null = null;
+    let turbo: AudioBufferSourceNode | null = null, turboFilter: BiquadFilterNode | null = null, turboGain: GainNode | null = null;
     if (e.turbo) {
-      turbo = ctx.createOscillator();
-      turbo.type = 'sine';
-      turbo.frequency.value = 2500;
+      // A pure sine whistle was a piercing squeal; filtered noise gives a gentle spool sound.
+      turbo = ctx.createBufferSource();
+      turbo.buffer = this.noise;
+      turbo.loop = true;
+      turboFilter = this.bandpass(900, 2.5);
       turboGain = ctx.createGain();
       turboGain.gain.value = 0;
-      turbo.connect(turboGain).connect(this.master);
+      turbo.connect(turboFilter).connect(turboGain).connect(this.master);
       turbo.start();
     }
     src.start();
     sub.start();
-    this.engine = { src, sub, shaper, filter, gain, subGain, intake, intakeGain, turbo, turboGain };
+    this.engine = { src, sub, shaper, filter, gain, subGain, intake, intakeGain, turbo, turboFilter, turboGain };
     // Little start-up "vroom"
     this.tone('sawtooth', 50, 120, 0.15, 0.5);
   }
@@ -270,7 +274,7 @@ export class GameAudio {
     // Wind and tire skid don't depend on the engine.
     const sp = Math.abs(s.speed);
     this.wind.gain.setTargetAtTime(e.wind * Math.min(1, (sp / 55) ** 2) * 0.22, t, 0.1);
-    this.skid.gain.setTargetAtTime(s.skid * Math.min(1, sp / 10) * 0.35, t, 0.05);
+    this.skid.gain.setTargetAtTime(Math.max(0, s.skid - 0.25) * Math.min(1, sp / 10) * 0.2, t, 0.05);
 
     if (!s.running) {
       if (!this.stalled) {
@@ -286,13 +290,14 @@ export class GameAudio {
       return;
     }
 
-    const rate = s.rpm / BASE_RPM;
+    const rate = (s.rpm / BASE_RPM) * e.pitch;
     const rough = s.damage > 0.5 ? 1 + (Math.random() - 0.5) * s.damage * 0.12 : 1;
     n.src.playbackRate.setTargetAtTime(rate * rough, t, 0.03);
     n.sub.playbackRate.setTargetAtTime(rate * 0.5, t, 0.03);
     const rpmFrac = (s.rpm - e.idleRpm) / (e.redlineRpm - e.idleRpm);
     const load = s.misfire ? 0 : s.throttle;
-    n.filter.frequency.setTargetAtTime(e.tone * (0.55 + load * 0.6 + rpmFrac * 0.9), t, 0.05);
+    // Capped so high revs never turn shrill.
+    n.filter.frequency.setTargetAtTime(Math.min(2800, e.tone * (0.55 + load * 0.5 + rpmFrac * 0.6)), t, 0.05);
     const vol = e.volume * (0.16 + load * 0.16 + rpmFrac * 0.1) * (s.misfire ? 0.25 : 1);
     n.gain.gain.setTargetAtTime(vol, t, 0.04);
     n.intakeGain.gain.setTargetAtTime(load * (0.03 + rpmFrac * 0.05), t, 0.05);
@@ -302,13 +307,13 @@ export class GameAudio {
     if (e.turbo && n.turbo && n.turboGain) {
       const target = load * Math.min(1, rpmFrac * 1.6);
       this.boostLevel += (target - this.boostLevel) * Math.min(1, dt * (target > this.boostLevel ? 1.5 : 6));
-      n.turbo.frequency.setTargetAtTime(1800 + this.boostLevel * 4200, t, 0.05);
-      n.turboGain.gain.setTargetAtTime(this.boostLevel * 0.025, t, 0.05);
+      n.turboFilter!.frequency.setTargetAtTime(700 + this.boostLevel * 1100, t, 0.08);
+      n.turboGain.gain.setTargetAtTime(this.boostLevel * 0.035, t, 0.08);
       if (this.lastThrottle > 0.5 && s.throttle < 0.5 && this.boostLevel > 0.4) this.blowOff(this.boostLevel);
     }
     // V12-style pops and crackles on lift-off at high revs.
     if (this.lastThrottle > 0.5 && s.throttle < 0.5 && rpmFrac > 0.45 && Math.random() < e.popChance) this.crackles(e.cylinders >= 12 ? 9 : 4);
-    if (s.shifted && e.cylinders >= 12) this.tone('sawtooth', 160, 70, 0.08, 0.08);
+    if (s.shifted && e.cylinders >= 12) this.tone('sawtooth', 110, 55, 0.08, 0.08);
     if (s.misfire) this.backfire(0.5);
     if (s.boosting && !this.wasBoosting) this.whoosh();
     this.wasBoosting = s.boosting;
@@ -316,10 +321,10 @@ export class GameAudio {
   }
 
   private blowOff(level: number) {
-    const f = this.bandpass(2600, 1.2);
-    const { t } = this.burst(f, 0.25 * level, 0.01, 0.35);
-    f.frequency.setValueAtTime(3200, t);
-    f.frequency.exponentialRampToValueAtTime(900, t + 0.35);
+    const f = this.bandpass(1500, 1.0);
+    const { t } = this.burst(f, 0.16 * level, 0.01, 0.3);
+    f.frequency.setValueAtTime(1800, t);
+    f.frequency.exponentialRampToValueAtTime(600, t + 0.3);
   }
 
   private crackles(n: number) {

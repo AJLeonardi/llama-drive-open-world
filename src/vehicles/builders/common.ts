@@ -105,11 +105,12 @@ export function interior(m: ModelBuilder, o: InteriorOpts) {
   m.part('interior', 'interior', merge(geos), { finish: 'interior', sound: 'plastic' });
 
   // Glowing gauges in front of the driver.
+  // Small dials set into the dash face, below the steering wheel's line of sight.
   const gauges = merge([
-    cyl({ at: [o.eye.x - 0.09, o.dashY + 0.1, dashZ - 0.27], radius: 0.055, length: 0.01, axis: 'z', segments: 16, color: 0x8fd3ff }),
-    cyl({ at: [o.eye.x + 0.09, o.dashY + 0.1, dashZ - 0.27], radius: 0.055, length: 0.01, axis: 'z', segments: 16, color: 0x8fd3ff }),
+    cyl({ at: [o.eye.x - 0.07, o.dashY + 0.02, dashZ - 0.255], radius: 0.035, length: 0.01, axis: 'z', segments: 14, color: 0x2a6f9a }),
+    cyl({ at: [o.eye.x + 0.07, o.dashY + 0.02, dashZ - 0.255], radius: 0.035, length: 0.01, axis: 'z', segments: 14, color: 0x2a6f9a }),
   ]);
-  m.detail(gauges, 'headlight');
+  m.detail(gauges, 'interior');
 
   // Steering wheel on a pivot so it can turn with the front wheels.
   const pivot = new THREE.Group();

@@ -7,7 +7,7 @@ interface Piece {
   ownsGeometry: boolean;
 }
 
-const MAX_PIECES = 70;
+const MAX_PIECES = 110;
 const box = new THREE.Box3();
 const size = new THREE.Vector3();
 const center = new THREE.Vector3();

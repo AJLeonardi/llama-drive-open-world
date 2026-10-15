@@ -52,7 +52,8 @@ export const RIVER = { z: -296, halfWidth: 34, x0: WORLD.x0, x1: -1470, bank: 12
 export const HARBOR_X = -2280;
 export const WATER_LEVEL = -0.9;
 
-export const SPAWN = { x: -1250, z: 7, heading: Math.PI / 2 };
+// Start at the edge of Boston on the westbound side of the highway, facing into the city.
+export const SPAWN = { x: -1395, z: -7, heading: -Math.PI / 2 };
 
 function arc(cx: number, cz: number, r: number, a0: number, a1: number, n: number): Vec2[] {
   const out: Vec2[] = [];

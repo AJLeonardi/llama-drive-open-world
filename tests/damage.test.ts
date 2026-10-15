@@ -57,6 +57,7 @@ describe('damage math', () => {
   it('dents get deeper with harder hits but are capped', () => {
     expect(dentDepth(5)).toBeGreaterThan(dentDepth(2));
     expect(dentDepth(30)).toBeGreaterThan(dentDepth(5));
-    expect(dentDepth(500)).toBeLessThanOrEqual(0.42);
+    expect(dentDepth(500)).toBeLessThanOrEqual(1.1);
+    expect(dentDepth(34)).toBeGreaterThan(0.8); // ~70 mph into a wall crushes the front
   });
 });

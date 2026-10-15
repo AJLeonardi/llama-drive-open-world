@@ -11,7 +11,7 @@ export function block(batch: StaticBatch, physics: Physics, cx: number, cz: numb
   const rect: Rect = { cx, cz, hw: w / 2, hd: d / 2, rot };
   batch.add(`win-${style}`, buildingGeometry(rect, y, h, tint, undefined, undefined, y < 1));
   batch.add('plain', buildingGeometry({ ...rect, hw: rect.hw + 0.3, hd: rect.hd + 0.3 }, y + h - 0.2, 0.6, 0xd9d2c4, 100, 100, false));
-  addBoxCollider(physics, rect, y, h);
+  addBoxCollider(physics, rect, y, h, style);
   return rect;
 }
 
@@ -114,7 +114,7 @@ export function prudentialTower(batch: StaticBatch, physics: Physics, cx: number
   block(batch, physics, cx, cz, W + 8, D + 8, 0, 7, 'stone', 0xe9e1d0);
   // The shaft
   batch.add('win-pru', buildingGeometry({ cx, cz, hw: W / 2, hd: D / 2, rot: 0 }, 0, top, 0xffffff, 16, 14, false, null));
-  addBoxCollider(physics, { cx, cz, hw: W / 2, hd: D / 2, rot: 0 }, 0, top + 14);
+  addBoxCollider(physics, { cx, cz, hw: W / 2, hd: D / 2, rot: 0 }, 0, top + 14, 'pru');
   // Faint mechanical bands
   for (const y of [52, 104, 150]) slab(batch, cx, cz, W + 0.25, D + 0.25, y, 2.2, 0x2a2928);
   // Observation crown: pale frame, glass all round, overhanging the shaft

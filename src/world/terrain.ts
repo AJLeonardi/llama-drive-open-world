@@ -26,7 +26,8 @@ export function addTerrainCollider(physics: Physics, t: Terrain) {
   const nr = t.rows - 1, nc = t.cols - 1;
   const h = new Float32Array(t.rows * t.cols);
   for (let c = 0; c < t.cols; c++) for (let r = 0; r < t.rows; r++) h[r + c * t.rows] = t.heights[r * t.cols + c];
-  const desc = RAPIER.ColliderDesc.heightfield(nr, nc, h, { x: WORLD.x1 - WORLD.x0, y: 1, z: WORLD.z1 - WORLD.z0 })
+  // FIX_INTERNAL_EDGES stops cars 'catching' on the seams between terrain triangles.
+  const desc = RAPIER.ColliderDesc.heightfield(nr, nc, h, { x: WORLD.x1 - WORLD.x0, y: 1, z: WORLD.z1 - WORLD.z0 }, RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES)
     .setTranslation((WORLD.x0 + WORLD.x1) / 2, 0, (WORLD.z0 + WORLD.z1) / 2)
     .setFriction(0.8);
   const col = physics.world.createCollider(desc);

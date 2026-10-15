@@ -87,17 +87,23 @@ function buildingDetails(batch: StaticBatch, b: Building) {
 export function addBuilding(batch: StaticBatch, physics: Physics, b: Building) {
   batch.add(`win-${b.style}`, buildingGeometry(b.rect, b.y - 0.5, b.h + 0.5, b.tint, U_REPEAT, V_REPEAT, true, null));
   buildingDetails(batch, b);
-  addBoxCollider(physics, b.rect, b.y, b.h);
+  addBoxCollider(physics, b.rect, b.y, b.h, b.style);
 }
 
-export function addBoxCollider(physics: Physics, rect: Rect, y: number, h: number) {
+/** What a building collider is made of (used by building damage effects). */
+export interface BuildingInfo {
+  style: WindowStyle;
+}
+
+export function addBoxCollider(physics: Physics, rect: Rect, y: number, h: number, style: WindowStyle = 'concrete') {
   const col = physics.world.createCollider(
     RAPIER.ColliderDesc.cuboid(rect.hw, h / 2, rect.hd)
       .setTranslation(rect.cx, y + h / 2, rect.cz)
       .setRotation({ x: 0, y: Math.sin(rect.rot / 2), z: 0, w: Math.cos(rect.rot / 2) })
       .setFriction(0.6),
   );
-  physics.setOwner(col, { kind: 'building', material: 'concrete' });
+  const info: BuildingInfo = { style };
+  physics.setOwner(col, { kind: 'building', material: style === 'glass' ? 'glass' : 'concrete', ref: info });
   return col;
 }
 

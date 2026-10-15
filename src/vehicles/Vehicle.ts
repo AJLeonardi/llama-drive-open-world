@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Physics } from '../physics/Physics';
 import type { Impact } from '../physics/Impacts';
 import {
-  MAX_HEALTH, PART_LIMITS, applyDamage, carDamage, damageStage, dentDepth, dentRadius,
+  MAX_CRUSH, MAX_HEALTH, PART_LIMITS, applyDamage, carDamage, damageStage, dentDepth, dentRadius,
   handicapFor, impactDeltaV, misfireChancePerSecond,
 } from '../damage/Damage';
 import { dentGeometry } from '../damage/Deformer';
@@ -150,7 +150,8 @@ export class Vehicle {
       const near = 1 - dist / radius;
       part.damage += dv * near;
       if (part.kind !== 'glass') {
-        if (dentGeometry(geo, part.original, pLocal, dLocal, depth * (part.kind === 'body' ? 1 : 1.2), radius, part.kind === 'body' ? 0.45 : 0.3)) {
+        const body = part.kind === 'body';
+        if (dentGeometry(geo, part.original, pLocal, dLocal, depth * (body ? 1 : 1.2), radius, body ? MAX_CRUSH.body : MAX_CRUSH.panel)) {
           geo.computeVertexNormals(); // keep the smooth shading following the crumpled shape
           geo.computeBoundingBox();
         }

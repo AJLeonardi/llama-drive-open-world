@@ -48,6 +48,30 @@ describe('driving', () => {
     expect(car.speed).toBeLessThan(-3);
   });
 
+  it('the back pedal brakes hard: 60 mph to a stop in under 2 seconds', async () => {
+    for (const id of CAR_IDS) {
+      const { car, run } = await makeTestbed(id);
+      car.body.setLinvel({ x: 0, y: 0, z: 26.8 }, true);
+      run(0.05, COAST);
+      let t = 0;
+      run(4, { steer: 0, throttle: 0, reverse: 1 }, () => { if (car.speed > 0.5) t += 1 / 60; });
+      expect(t).toBeLessThan(2);
+    }
+  });
+
+  it('no car scrapes its body on the road at top speed', async () => {
+    for (const id of CAR_IDS) {
+      const { physics, car, run } = await makeTestbed(id);
+      let contacts = 0, minGap = 9;
+      run(15, GAS, () => {
+        physics.events.drainContactForceEvents(() => contacts++);
+        minGap = Math.min(minGap, car.position.y + car.spec.chassisY - car.spec.half.y);
+      });
+      expect(contacts).toBe(0);
+      expect(minGap).toBeGreaterThan(0.2); // room for seams, curbs and bumps
+    }
+  });
+
   it('rolls downhill when coasting', async () => {
     const { physics, car, run } = await makeTestbed('wrangler');
     // Replace flat ground with a 6° slope falling toward +z.
@@ -110,7 +134,7 @@ describe('crashing', () => {
     run(1, COAST, () => { for (const i of tracker.collect()) first += carDamage(i.impulse, spec.mass, spec.durability); });
     run(3, GAS, () => { for (const i of tracker.collect()) after += carDamage(i.impulse, spec.mass, spec.durability); });
     expect(first).toBeGreaterThan(20);
-    expect(first).toBeLessThan(80); // a 54 mph wall hit hurts a lot but isn't instantly fatal
+    expect(first).toBeLessThan(90); // a 54 mph wall hit hurts a lot but isn't instantly fatal
     expect(after).toBeLessThan(2);
   });
 

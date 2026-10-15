@@ -16,6 +16,9 @@ const flip = new THREE.Quaternion()
 export class Cameras {
   mode: CameraMode = 'cockpit';
   private orbitAngle = 0;
+  /** Extra yaw for the chase camera from swiping; eases back behind the car after a pause. */
+  private chaseYaw = 0;
+  private sinceDrag = 99;
   private orbitPitch = 0.35;
   private shake = 0;
   private chasePos = new THREE.Vector3();
@@ -30,13 +33,21 @@ export class Cameras {
 
   reset(mode: CameraMode = 'cockpit') {
     this.mode = mode;
+    this.chaseYaw = 0;
     this.initialized = false;
   }
 
-  /** Drag on the screen to spin the orbit camera. */
+  /** Swipe on the screen: spins the orbit camera, or swings the chase camera around the car. */
   drag(dx: number, dy: number) {
-    this.orbitAngle -= dx * 0.008;
-    this.orbitPitch = THREE.MathUtils.clamp(this.orbitPitch + dy * 0.005, 0.05, 1.2);
+    this.sinceDrag = 0;
+    if (this.mode === 'orbit') {
+      this.orbitAngle -= dx * 0.008;
+      this.orbitPitch = THREE.MathUtils.clamp(this.orbitPitch + dy * 0.005, 0.05, 1.2);
+    } else if (this.mode === 'chase') {
+      this.chaseYaw -= dx * 0.01;
+      // keep it in -π..π so easing back takes the short way round
+      this.chaseYaw = Math.atan2(Math.sin(this.chaseYaw), Math.cos(this.chaseYaw));
+    }
   }
 
   addShake(amount: number) {
@@ -58,12 +69,17 @@ export class Cameras {
       fov = 75;
     } else if (this.mode === 'chase') {
       target.copy(root.position).add(v.set(0, 1.3, 0));
+      this.sinceDrag += dt;
+      if (this.sinceDrag > 1.8) this.chaseYaw *= Math.exp(-dt * 1.5);
+      const yaw = heading + this.chaseYaw;
       const back = 7.5 + Math.min(3, Math.abs(car.sim.speed) * 0.05);
-      desired.set(target.x - Math.sin(heading) * back, target.y + 2.4, target.z - Math.cos(heading) * back);
+      desired.set(target.x - Math.sin(yaw) * back, target.y + 2.4, target.z - Math.cos(yaw) * back);
       if (!this.initialized) this.chasePos.copy(desired);
       this.chasePos.lerp(desired, 1 - Math.exp(-dt * 6));
       cam.position.copy(this.avoidWalls(target, this.chasePos, car));
-      cam.lookAt(target.x + Math.sin(heading) * 3, target.y, target.z + Math.cos(heading) * 3);
+      // Look a little ahead of the car (less so while swung round, so it stays centred).
+      const ahead = 3 * Math.max(0, Math.cos(this.chaseYaw));
+      cam.lookAt(target.x + Math.sin(heading) * ahead, target.y, target.z + Math.cos(heading) * ahead);
       fov = 62 + Math.min(16, Math.abs(car.sim.speed) * 0.25);
     } else {
       if (!this.initialized) this.orbitAngle = heading + Math.PI * 0.25; // start at the front corner, where most damage is
