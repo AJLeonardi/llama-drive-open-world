@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Physics, RAPIER } from '../physics/Physics';
-import { LAKE, TERRAIN_CELL, WATER_LEVEL, WORLD, HARBOR_X, RIVER, heightAt, surfaceAt } from './layout';
+import { HARBOR, LAKE, TERRAIN_CELL, WATER_LEVEL, WORLD, HARBOR_X, RIVER, heightAt, surfaceAt } from './layout';
 import { StaticBatch, TILE } from './batch';
 import { valueNoise } from '../util/math';
 import type { Surface } from '../physics/surfaces';
@@ -22,16 +22,7 @@ export function sampleTerrain(): Terrain {
 }
 
 export function addTerrainCollider(physics: Physics, t: Terrain) {
-  // Rapier wants column-major heights with rows along z and columns along x.
-  const nr = t.rows - 1, nc = t.cols - 1;
-  const h = new Float32Array(t.rows * t.cols);
-  for (let c = 0; c < t.cols; c++) for (let r = 0; r < t.rows; r++) h[r + c * t.rows] = t.heights[r * t.cols + c];
-  // FIX_INTERNAL_EDGES stops cars 'catching' on the seams between terrain triangles.
-  const desc = RAPIER.ColliderDesc.heightfield(nr, nc, h, { x: WORLD.x1 - WORLD.x0, y: 1, z: WORLD.z1 - WORLD.z0 }, RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES)
-    .setTranslation((WORLD.x0 + WORLD.x1) / 2, 0, (WORLD.z0 + WORLD.z1) / 2)
-    .setFriction(0.8);
-  const col = physics.world.createCollider(desc);
-  physics.setOwner(col, { kind: 'ground', material: 'ground' });
+  heightfieldCollider(physics, t.cols, t.rows, t.heights, (WORLD.x0 + WORLD.x1) / 2, (WORLD.z0 + WORLD.z1) / 2);
 }
 
 /** Interpolated height from the sampled grid (matches the physics surface). */
@@ -55,47 +46,68 @@ const GROUND_COLORS: Record<Surface, [number, number, number]> = {
 
 const ROCK = [0.46, 0.41, 0.36];
 
-/** Terrain meshes, one per batch tile, with surface-based vertex colours. */
+/**
+ * A terrain mesh for a patch of `nc`×`nr` cells starting at (x0, z0), with surface-based
+ * vertex colours (steep slopes show bare rock). `h(c, r)` gives the height at a grid
+ * point and may be asked for points one cell outside the patch (for slopes).
+ */
+export function terrainPatch(x0: number, z0: number, nc: number, nr: number, h: (c: number, r: number) => number) {
+  const pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [];
+  for (let r = 0; r <= nr; r++)
+    for (let c = 0; c <= nc; c++) {
+      const x = x0 + c * TERRAIN_CELL, z = z0 + r * TERRAIN_CELL;
+      const y = h(c, r);
+      pos.push(x, y, z);
+      uv.push(x / 24, z / 24);
+      let s = surfaceAt(x, z);
+      if (s === 'asphalt') s = 'concrete';
+      const base = GROUND_COLORS[s];
+      const n = 0.88 + 0.24 * valueNoise(x / 40, z / 40);
+      // Hills get a little lighter on top.
+      const lift = s === 'grass' ? Math.min(0.12, Math.max(0, y) * 0.004) : 0;
+      // Steep slopes (cliffs, terrace drop-offs, cuttings) show bare rock.
+      const slope = Math.hypot(h(c + 1, r) - h(c - 1, r), h(c, r + 1) - h(c, r - 1)) / (2 * TERRAIN_CELL);
+      const rock = s === 'grass' || s === 'dirt' ? Math.min(1, Math.max(0, (slope - 0.45) * 2.5)) : 0;
+      const rn = 0.8 + 0.3 * valueNoise(x / 9, y / 6);
+      for (let k = 0; k < 3; k++) col.push((base[k] * n + (k < 2 ? lift : lift * 0.5)) * (1 - rock) + ROCK[k] * rn * rock);
+    }
+  for (let r = 0; r < nr; r++)
+    for (let c = 0; c < nc; c++) {
+      const a = r * (nc + 1) + c, b = a + 1, d = a + nc + 1, e = d + 1;
+      idx.push(a, d, b, b, d, e);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Terrain meshes for the middle of the map, one per batch tile. */
 export function addTerrainMeshes(batch: StaticBatch, t: Terrain) {
   const per = TILE / TERRAIN_CELL;
-  for (let c0 = 0; c0 < t.cols - 1; c0 += per) {
+  const at = (rr: number, cc: number) => t.heights[Math.min(t.rows - 1, Math.max(0, rr)) * t.cols + Math.min(t.cols - 1, Math.max(0, cc))];
+  for (let c0 = 0; c0 < t.cols - 1; c0 += per)
     for (let r0 = 0; r0 < t.rows - 1; r0 += per) {
       const nc = Math.min(per, t.cols - 1 - c0), nr = Math.min(per, t.rows - 1 - r0);
-      const pos: number[] = [], col: number[] = [], uv: number[] = [], idx: number[] = [];
-      for (let r = 0; r <= nr; r++)
-        for (let c = 0; c <= nc; c++) {
-          const x = WORLD.x0 + (c0 + c) * TERRAIN_CELL, z = WORLD.z0 + (r0 + r) * TERRAIN_CELL;
-          const y = t.heights[(r0 + r) * t.cols + c0 + c];
-          pos.push(x, y, z);
-          uv.push(x / 24, z / 24);
-          let s = surfaceAt(x, z);
-          if (s === 'asphalt') s = 'concrete';
-          const base = GROUND_COLORS[s];
-          const n = 0.88 + 0.24 * valueNoise(x / 40, z / 40);
-          // Hills get a little lighter on top.
-          const lift = s === 'grass' ? Math.min(0.12, Math.max(0, y) * 0.004) : 0;
-          // Steep slopes (cliffs, terrace drop-offs) show bare rock.
-          const gc = c0 + c, gr = r0 + r;
-          const hgt = (rr: number, cc: number) => t.heights[Math.min(t.rows - 1, Math.max(0, rr)) * t.cols + Math.min(t.cols - 1, Math.max(0, cc))];
-          const slope = Math.hypot(hgt(gr, gc + 1) - hgt(gr, gc - 1), hgt(gr + 1, gc) - hgt(gr - 1, gc)) / (2 * TERRAIN_CELL);
-          const rock = s === 'grass' || s === 'dirt' ? Math.min(1, Math.max(0, (slope - 0.45) * 2.5)) : 0;
-          const rn = 0.8 + 0.3 * valueNoise(x / 9, y / 6);
-          for (let k = 0; k < 3; k++) col.push((base[k] * n + (k < 2 ? lift : lift * 0.5)) * (1 - rock) + ROCK[k] * rn * rock);
-        }
-      for (let r = 0; r < nr; r++)
-        for (let c = 0; c < nc; c++) {
-          const a = r * (nc + 1) + c, b = a + 1, d = a + nc + 1, e = d + 1;
-          idx.push(a, d, b, b, d, e);
-        }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-      g.setIndex(idx);
-      g.computeVertexNormals();
-      batch.add('ground', g);
+      batch.add('ground', terrainPatch(WORLD.x0 + c0 * TERRAIN_CELL, WORLD.z0 + r0 * TERRAIN_CELL, nc, nr, (c, r) => at(r0 + r, c0 + c)));
     }
-  }
+}
+
+/** Rapier heightfield over `cols`×`rows` samples (row-major heights) centred on (cx, cz). */
+export function heightfieldCollider(physics: Physics, cols: number, rows: number, heights: ArrayLike<number>, cx: number, cz: number) {
+  // Rapier wants column-major heights with rows along z and columns along x.
+  const h = new Float32Array(rows * cols);
+  for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) h[r + c * rows] = heights[r * cols + c];
+  // FIX_INTERNAL_EDGES stops cars 'catching' on the seams between terrain triangles.
+  const desc = RAPIER.ColliderDesc.heightfield(rows - 1, cols - 1, h, { x: (cols - 1) * TERRAIN_CELL, y: 1, z: (rows - 1) * TERRAIN_CELL }, RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES)
+    .setTranslation(cx, 0, cz)
+    .setFriction(0.8);
+  const col = physics.world.createCollider(desc);
+  physics.setOwner(col, { kind: 'ground', material: 'ground' });
+  return col;
 }
 
 export function waterMeshes(): THREE.Mesh[] {
@@ -115,5 +127,5 @@ export function waterMeshes(): THREE.Mesh[] {
   lake.geometry.translate(LAKE.x, WATER_LEVEL, LAKE.z);
   lake.renderOrder = 2;
   lake.receiveShadow = true;
-  return [mk(HARBOR_X + 6, RIVER.x1, RIVER.z - w, RIVER.z + w), mk(WORLD.x0, HARBOR_X + 6, WORLD.z0, WORLD.z1), lake];
+  return [mk(HARBOR_X + 6, RIVER.x1, RIVER.z - w, RIVER.z + w), mk(HARBOR.x0 + 20, HARBOR_X + 6, -HARBOR.z + 4, HARBOR.z - 4), lake];
 }

@@ -38,3 +38,28 @@ describe('directions', () => {
       }
   });
 });
+
+describe('directions in highway country', () => {
+  it('reaches a far corner of the map by highway', async () => {
+    const { HIGHWAYS } = await import('../src/world/outer');
+    const h = HIGHWAYS[HIGHWAYS.length - 1];
+    const tx = h.ax + h.ux * h.len * 0.5, tz = h.az + h.uz * h.len * 0.5;
+    const t0 = performance.now();
+    const p = findRoute(SPAWN.x, SPAWN.z, tx, tz);
+    const ms = performance.now() - t0;
+    expect(p.length).toBeGreaterThan(10);
+    expect(Math.hypot(p[p.length - 2][0] - tx, p[p.length - 2][1] - tz)).toBeLessThan(40);
+    expect(ms).toBeLessThan(400); // (includes building the road graph the first time)
+  });
+
+  it('never turns from one highway onto another where they only cross on a bridge', async () => {
+    const { CROSSINGS, HIGHWAYS } = await import('../src/world/outer');
+    for (const c of CROSSINGS.slice(0, 8)) {
+      const U = HIGHWAYS[c.upper], L = HIGHWAYS[c.lower];
+      // From just before the crossing on the upper road to just after it on the lower one.
+      // Turning at the bridge would be ~240 m; the real way round, by a ramp, is longer.
+      const p = findRoute(c.x - U.ux * 120, c.z - U.uz * 120, c.x + L.ux * 120, c.z + L.uz * 120);
+      expect(length(p)).toBeGreaterThan(400);
+    }
+  });
+});

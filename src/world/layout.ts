@@ -6,14 +6,16 @@
 
 import { AABB2, Vec2, distOutsideAABB, distToSegment, inAABB, lerp, smoothstep, valueNoise } from '../util/math';
 import type { Surface } from '../physics/surfaces';
+import { WORLD } from './bounds';
+import { terrainBase } from './hills';
+import { outerLakeAt, outerRoadAt, shapeOuter } from './outer';
+
+export { WORLD, OUTER, TERRAIN_CELL, CHUNK } from './bounds';
 
 // The four places sit around a circle: Boston (west) and NYC (east) joined by a short
 // highway, the dirt track to the north and the demolition park to the south, each a
 // few seconds' drive from its neighbours. Thunder Mountain stands on the north-east
-// outskirts.
-export const WORLD = { x0: -1112, x1: 1112, z0: -1304, z1: 1320 };
-/** Terrain sample spacing (m). Physics heightfield and terrain mesh share it. */
-export const TERRAIN_CELL = 8;
+// outskirts. Beyond them lies highway country (outer.ts).
 
 export type RoadKind = 'highway' | 'avenue' | 'street' | 'ramp' | 'dirt';
 
@@ -104,6 +106,8 @@ export const PARKS = [BOSTON_COMMON, CENTRAL_PARK];
 // Deep enough to sink a car (you get a few seconds with the fish, then a restart).
 export const RIVER = { z: -296, halfWidth: 34, x0: WORLD.x0, x1: -1470 + BOSTON_DX, bank: 12, depth: 4.5 };
 export const HARBOR_X = -2280 + BOSTON_DX;
+/** The harbour bay's far (west) shore and its half-width north–south. */
+export const HARBOR = { x0: -1460, z: 640 };
 export const WATER_LEVEL = -0.9;
 
 // Start at the edge of Boston on the westbound side of the highway, facing into the city.
@@ -287,8 +291,9 @@ export function distToRoad(x: number, z: number, roads: Road[] = ALL_ROADS) {
 export function waterDepth(x: number, z: number) {
   const { z: rz, halfWidth, bank, depth, x1 } = RIVER;
   const riverD = Math.abs(z - rz);
-  const river = (1 - smoothstep(halfWidth, halfWidth + bank, riverD)) * (1 - smoothstep(x1 - 40, x1, x));
-  const harbor = 1 - smoothstep(HARBOR_X, HARBOR_X + bank, x);
+  const river = (1 - smoothstep(halfWidth, halfWidth + bank, riverD)) * (1 - smoothstep(x1 - 40, x1, x)) * smoothstep(HARBOR.x0, HARBOR.x0 + 100, x);
+  // The harbour is a bay: open water west of the piers, with shores north, south and west.
+  const harbor = (1 - smoothstep(HARBOR_X, HARBOR_X + bank, x)) * (1 - smoothstep(HARBOR.z - bank, HARBOR.z, Math.abs(z))) * smoothstep(HARBOR.x0, HARBOR.x0 + bank * 4, x);
   const lake = (1 - smoothstep(LAKE.r, LAKE.r + LAKE.bank, Math.hypot(x - LAKE.x, z - LAKE.z))) * (LAKE.depth / depth);
   return depth * Math.max(river, harbor, lake);
 }
@@ -301,8 +306,33 @@ function distToFlat(x: number, z: number) {
     distOutsideAABB(x, z, DEMO_PARK) - 10,
     distOutsideAABB(x, z, TRACK_BOUNDS) - 10,
   );
-  if (d > 0) d = Math.min(d, distToRoad(x, z, COUNTRY_ROADS) - 8);
+  if (d > 0) d = Math.min(d, distToCountryRoad(x, z) - 8);
   return d;
+}
+
+// Country-road segments bucketed (with a wide margin) so the flattening check only
+// looks at roads close by; it runs for every terrain sample.
+const FLAT_REACH = 110;
+let countryBuckets: Map<number, [Vec2, Vec2, number][]> | null = null;
+function distToCountryRoad(x: number, z: number) {
+  if (!countryBuckets) {
+    countryBuckets = new Map();
+    for (const road of COUNTRY_ROADS)
+      for (const [a, b] of roadSegments(road)) {
+        const pad = road.width / 2 + FLAT_REACH;
+        for (let ix = Math.floor((Math.min(a[0], b[0]) - pad) / BUCKET); ix <= Math.floor((Math.max(a[0], b[0]) + pad) / BUCKET); ix++)
+          for (let iz = Math.floor((Math.min(a[1], b[1]) - pad) / BUCKET); iz <= Math.floor((Math.max(a[1], b[1]) + pad) / BUCKET); iz++) {
+            const k = bucketKey(ix, iz);
+            let l = countryBuckets.get(k);
+            if (!l) countryBuckets.set(k, (l = []));
+            l.push([a, b, road.width / 2]);
+          }
+      }
+  }
+  let best = FLAT_REACH;
+  for (const [a, b, hw] of countryBuckets.get(bucketKey(Math.floor(x / BUCKET), Math.floor(z / BUCKET))) ?? [])
+    best = Math.min(best, distToSegment(x, z, a[0], a[1], b[0], b[1]).d - hw);
+  return best;
 }
 
 const wrapAngle = (a: number) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
@@ -338,19 +368,7 @@ export function onMountainRoad(x: number, z: number) {
   return up >= 0 && r > MOUNTAIN.r + 3 && r < MOUNTAIN.r + MOUNTAIN.road;
 }
 
-/** Hills with flat terraces and steep drop-offs between them in places. */
-function hills(x: number, z: number) {
-  let h = 34 * (valueNoise(x / 300 + 11, z / 300 - 4) - 0.38) + 9 * (valueNoise(x / 110 + 7, z / 110 + 3) - 0.5);
-  const terraced = smoothstep(0.42, 0.58, valueNoise(x / 240 - 3, z / 240 + 9));
-  if (terraced > 0 && h > 0) {
-    const STEP = 6.5;
-    const t = h / STEP, f = t - Math.floor(t);
-    h = lerp(h, STEP * (Math.floor(t) + smoothstep(0.82, 1, f)), terraced);
-  }
-  return Math.max(h, -2);
-}
-
-/** Ground height before roads/buildings are added. */
+/** Ground height before buildings are added. */
 export function heightAt(x: number, z: number) {
   // Keep a flat meadow around the mountain and its lake so the cliffs stand out.
   const nearMountain = Math.min(
@@ -358,14 +376,16 @@ export function heightAt(x: number, z: number) {
     Math.hypot(x - LAKE.x, z - LAKE.z) - LAKE.r,
   );
   const flat = smoothstep(0, 90, distToFlat(x, z)) * smoothstep(20, 110, nearMountain);
-  // Push the far edges up so the world feels bowl-shaped rather than ending abruptly.
-  const edge = Math.max(
-    smoothstep(WORLD.z1 - 260, WORLD.z1, z),
-    smoothstep(WORLD.z0 + 260, WORLD.z0, z),
-    smoothstep(WORLD.x1 - 30, WORLD.x1, x) * 0.5,
-  ) * 30;
-  const ground = hills(x, z) * flat + edge * smoothstep(0, 90, distToFlat(x, z));
-  return Math.max(ground, mountainHeight(x, z), beaconHillHeight(x, z)) - waterDepth(x, z);
+  const ground = terrainBase(x, z) * flat;
+  // The mountain and Beacon Hill rise out of the ground (they're 0 elsewhere, which must
+  // not lift valleys up to 0).
+  let h = ground;
+  const m = mountainHeight(x, z), b = beaconHillHeight(x, z);
+  if (m > 0) h = Math.max(h, m);
+  if (b > 0) h = Math.max(h, b);
+  h -= waterDepth(x, z);
+  // Highway country: interchanges, lakes, and the highways' cuts and embankments.
+  return shapeOuter(x, z, h);
 }
 
 export function surfaceAt(x: number, z: number): Surface {
@@ -374,6 +394,9 @@ export function surfaceAt(x: number, z: number): Surface {
   if (road === 'dirt') return 'dirt';
   if (road) return 'asphalt';
   if (onMountainRoad(x, z)) return 'dirt';
+  if (outerRoadAt(x, z)) return 'asphalt';
+  const lake = outerLakeAt(x, z);
+  if (lake) return Math.hypot(x - lake.x, z - lake.z) < lake.r * 0.8 ? 'water' : 'sand';
   if (depth > 1.2) return 'water';
   if (depth > 0.05) return 'sand';
   if (inAABB(x, z, DEMO_PARK)) return 'dirt';
@@ -411,8 +434,18 @@ export const BRIDGES: Bridge[] = [-1680, -2020, -2250].map(bostonX).map((x) => (
   width: 16,
 }));
 
+/** Height of the water surface at a spot, or null if it's dry land. */
+export function waterLevelAt(x: number, z: number): number | null {
+  if (waterDepth(x, z) > 0 && !bridgeAt(x, z)) return WATER_LEVEL;
+  return outerLakeAt(x, z)?.level ?? null;
+}
+
 /** Is this spot deep water (car would sink)? */
-export const isDeepWater = (x: number, z: number) => waterDepth(x, z) > -WATER_LEVEL + 1.0 && !bridgeAt(x, z);
+export const isDeepWater = (x: number, z: number) => {
+  if (waterDepth(x, z) > -WATER_LEVEL + 1.0 && !bridgeAt(x, z)) return true;
+  const l = outerLakeAt(x, z);
+  return !!l && Math.hypot(x - l.x, z - l.z) < l.r * 0.8;
+};
 
 export function bridgeAt(x: number, z: number) {
   return BRIDGES.some((b) => Math.abs(x - b.x) <= b.width / 2 && z >= b.z0 && z <= b.z1);

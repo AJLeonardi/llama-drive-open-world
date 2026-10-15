@@ -14,6 +14,7 @@ import { buildDirtTrack } from './dirtTrack';
 import { buildDemoPark } from './demoPark';
 import { buildMountain } from './mountain';
 import { buildCityStunts } from './cityStunts';
+import { OuterWorld } from './OuterWorld';
 import type { PropSpawn } from './propModels';
 import type { ParkedSpawn } from './streetLife';
 import { boostTexture, dirtRoadTexture, groundTexture, roadTexture, sidewalkTexture, storefrontTexture, windowTexture, WindowStyle } from '../util/textures';
@@ -58,6 +59,8 @@ export class World {
   readonly group = new THREE.Group();
   readonly terrain: Terrain;
   readonly props: Breakable;
+  /** Highway country beyond the middle of the map (streamed). */
+  readonly outer: OuterWorld;
   parked: ParkedCar[] = [];
   private tiles: Tile[];
   private parkedSpawns: ParkedSpawn[];
@@ -88,7 +91,10 @@ export class World {
     const mountain = buildMountain(batch, physics, this.group, this.terrain);
     const stunts = buildCityStunts(batch, physics, this.group);
 
-    this.tiles = batch.build(materials());
+    const mats = materials();
+    this.tiles = batch.build(mats);
+    this.outer = new OuterWorld(physics, mats);
+    this.group.add(this.outer.group);
     for (const t of this.tiles) {
       this.group.add(t.group);
       for (const m of t.group.children as THREE.Mesh[]) {
@@ -126,7 +132,7 @@ export class World {
   }
 
   stats() {
-    return { tiles: this.tiles.length, parked: this.parked.length };
+    return { tiles: this.tiles.length, parked: this.parked.length, ...this.outer.stats() };
   }
 
   update(dt: number, camera: THREE.Vector3, particles: import('../fx/Particles').Particles, debris: import('../fx/Debris').Debris, player: THREE.Vector3 = camera) {
@@ -143,6 +149,7 @@ export class World {
       }
     }
     this.props.update(dt, particles, debris, camera, player);
+    this.outer.update(dt, camera, player);
     for (const p of this.parked) p.sync();
   }
 }

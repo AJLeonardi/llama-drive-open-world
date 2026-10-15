@@ -35,8 +35,6 @@ export class Hud {
   private root = document.getElementById('ui')!;
   private screens = new Map<Screen, HTMLElement>();
   private speedEl!: HTMLElement;
-  private healthBar!: HTMLElement;
-  private healthLabel!: HTMLElement;
   private flipBtn!: HTMLElement;
   private boostEl!: HTMLElement;
   private fpsEl!: HTMLElement;
@@ -66,15 +64,11 @@ export class Hud {
         <button class="round" data-act="menu" aria-label="Garage">🚗</button>
         <div class="gauges">
           <div class="speed">0<small>MPH</small></div>
-          <div class="health"><div></div></div>
-          <div class="health-label">CAR HEALTH</div>
         </div>
         <button class="round" data-act="camera" aria-label="Camera">🎥</button>
       </div>`);
     this.root.appendChild(top);
     this.speedEl = top.querySelector('.speed')!;
-    this.healthBar = top.querySelector('.health > div')!;
-    this.healthLabel = top.querySelector('.health-label')!;
     tap(top.querySelector('[data-act=menu]'), cb.openMenu);
     tap(top.querySelector('[data-act=camera]'), cb.nextCamera);
 
@@ -192,7 +186,6 @@ export class Hud {
   }
 
   private lastMph = -1;
-  private lastHealth = -1;
 
   // Only touch the DOM when what's shown actually changes (DOM writes are costly every frame).
   setSpeed(ms: number) {
@@ -200,15 +193,6 @@ export class Hud {
     if (mph === this.lastMph) return;
     this.lastMph = mph;
     this.speedEl.firstChild!.textContent = String(mph);
-  }
-
-  setHealth(h: number) {
-    h = Math.ceil(h);
-    if (h === this.lastHealth) return;
-    this.lastHealth = h;
-    this.healthBar.style.width = `${Math.max(0, h)}%`;
-    this.healthBar.style.background = h > 60 ? '#2ecc40' : h > 30 ? '#ffb000' : '#e8453c';
-    this.healthLabel.textContent = h <= 0 ? 'WRECKED!' : h < 30 ? 'SMOKING!' : 'CAR HEALTH';
   }
 
   private flipOn = false;

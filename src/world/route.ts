@@ -2,9 +2,12 @@
 //
 // Every road is sampled into nodes a few metres apart, linked along the road and to any
 // other road's nodes close by (that's how crossings, T-junctions and ramps join up).
-// The way up Thunder Mountain's spiral (terrain, not a Road) is added as an extra path.
+// The way up Thunder Mountain's spiral (terrain, not a Road) is added as an extra path,
+// and so is highway country. Straight highways never join each other directly (they
+// cross on bridges): only through the ramps, and at the Ring.
 import type { Vec2 } from '../util/math';
 import { ALL_ROADS, MOUNTAIN, MOUNTAIN_ROAD } from './layout';
+import { HIGHWAYS, HW, RAMPS, RAMP_HW, RING } from './outer';
 
 const STEP = 8; // node spacing along a road (m)
 const JOIN = 9; // nodes of different roads this close are connected (or within the wider road's half-width)
@@ -39,9 +42,13 @@ function mountainPath(): Vec2[] {
 function build(): Graph {
   const g: Graph = { x: [], z: [], hw: [], adj: [], grid: new Map() };
   const owner: number[] = [];
-  const paths: { pts: Vec2[]; closed: boolean; hw: number }[] = [
+  const isLine: boolean[] = [];
+  const paths: { pts: Vec2[]; closed: boolean; hw: number; line?: boolean; step?: number }[] = [
     ...ALL_ROADS.map((r) => ({ pts: r.pts, closed: !!r.closed, hw: r.width / 2 })),
     { pts: mountainPath(), closed: false, hw: 7 },
+    ...HIGHWAYS.map((h) => ({ pts: [[h.ax, h.az], [h.ax + h.ux * h.len, h.az + h.uz * h.len]] as Vec2[], closed: false, hw: HW, line: true, step: 40 })),
+    { pts: RING.pts.filter((_, i) => i % 2 === 0), closed: true, hw: HW, step: 50 },
+    ...RAMPS.map((r) => ({ pts: r.pts, closed: false, hw: RAMP_HW })),
   ];
   paths.forEach((p, pi) => {
     const first = g.x.length;
@@ -53,11 +60,12 @@ function build(): Graph {
       g.hw.push(p.hw);
       g.adj.push([]);
       owner.push(pi);
+      isLine.push(!!p.line);
       if (id > first) link(id - 1, id);
     };
     for (let i = 0; i < n - 1 + (p.closed ? 1 : 0); i++) {
       const a = p.pts[i], b = p.pts[(i + 1) % n];
-      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / STEP));
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (p.step ?? STEP)));
       for (let k = 0; k < steps; k++) add(a[0] + ((b[0] - a[0]) * k) / steps, a[1] + ((b[1] - a[1]) * k) / steps);
     }
     if (p.closed) link(g.x.length - 1, first);
@@ -79,7 +87,7 @@ function build(): Graph {
     for (let ix = cx - 2; ix <= cx + 2; ix++)
       for (let iz = cz - 2; iz <= cz + 2; iz++)
         for (const j of g.grid.get(key(ix, iz)) ?? [])
-          if (j > i && owner[j] !== owner[i] && Math.hypot(g.x[i] - g.x[j], g.z[i] - g.z[j]) <= Math.max(JOIN, Math.max(g.hw[i], g.hw[j]) + 2)) link(i, j);
+          if (j > i && owner[j] !== owner[i] && !(isLine[i] && isLine[j]) && Math.hypot(g.x[i] - g.x[j], g.z[i] - g.z[j]) <= Math.max(JOIN, Math.max(g.hw[i], g.hw[j]) + 2)) link(i, j);
   }
   return g;
 }

@@ -1,13 +1,19 @@
-// Round mini-map (heading-up, follows the car) + a full-screen world map (north-up).
-// The map image is drawn once from the world layout; each frame just transforms it.
+// Round mini-map (heading-up, follows the car) + a full-screen world map (north-up) you
+// can swipe around and pinch to zoom, and tap to drop a pin for directions.
+//
+// The middle of the map (cities etc.) is a picture drawn once; highway country (long
+// highways, ramps, the Ring, lakes) is drawn as vector paths at any zoom.
 import {
-  ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR_X, LAKE, LOOP, MOUNTAIN, NYC, RIVER, Road, TRACK, WORLD,
+  ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR, HARBOR_X, LAKE, LOOP, MOUNTAIN, NYC, OUTER, RIVER, Road, TRACK, WORLD,
 } from '../world/layout';
+import { HIGHWAYS, OUTER_LAKES, RAMPS, RING } from '../world/outer';
+import { RING_APOTHEM, HEX } from '../world/bounds';
 import { findRoute } from '../world/route';
 import type { Vec2 } from '../util/math';
 
-const S = 0.5; // map pixels per metre
+const S = 0.5; // pixels per metre in the picture of the middle
 const VIEW_METRES = 560; // width of world shown in the mini-map
+const GRASS = '#7fb35d';
 
 export interface Destination {
   x: number;
@@ -33,7 +39,8 @@ const ROAD_STYLE: Record<Road['kind'], [string, number]> = {
   dirt: ['#a8743f', 1],
 };
 
-function drawWorld(): HTMLCanvasElement {
+/** Picture of the middle of the map (WORLD), S pixels per metre. */
+function drawMiddle(): HTMLCanvasElement {
   const w = Math.round((WORLD.x1 - WORLD.x0) * S), h = Math.round((WORLD.z1 - WORLD.z0) * S);
   const c = document.createElement('canvas');
   c.width = w;
@@ -44,18 +51,18 @@ function drawWorld(): HTMLCanvasElement {
     g.fillStyle = color;
     g.fillRect(X(b.x0), Z(b.z0), (b.x1 - b.x0) * S, (b.z1 - b.z0) * S);
   };
-  g.fillStyle = '#7fb35d';
+  g.fillStyle = GRASS;
   g.fillRect(0, 0, w, h);
   rect(BOSTON, '#c8c3b8');
   rect(NYC, '#c3c3c6');
   rect(BOSTON_COMMON, '#6fae52');
   rect(CENTRAL_PARK, '#6fae52');
   rect(DEMO_PARK, '#c9a674');
-  // Water: river and harbour
+  // Water: river, harbour bay, the lake under Thunder Mountain
   g.fillStyle = '#4b93cf';
   const rw = RIVER.halfWidth + RIVER.bank * 0.5;
   g.fillRect(X(HARBOR_X), Z(RIVER.z - rw), (RIVER.x1 - HARBOR_X) * S, rw * 2 * S);
-  g.fillRect(0, 0, X(HARBOR_X + 6), h);
+  rect({ x0: HARBOR.x0 + 20, x1: HARBOR_X + 6, z0: -HARBOR.z + 6, z1: HARBOR.z - 6 }, '#4b93cf');
   g.beginPath();
   g.arc(X(LAKE.x), Z(LAKE.z), (LAKE.r + LAKE.bank * 0.6) * S, 0, Math.PI * 2);
   g.fill();
@@ -84,6 +91,37 @@ function drawWorld(): HTMLCanvasElement {
   return c;
 }
 
+/** Highway country as paths in world metres (drawn under a transform at any zoom). */
+function countryPaths() {
+  const highways = new Path2D();
+  for (const h of HIGHWAYS) {
+    highways.moveTo(h.ax, h.az);
+    highways.lineTo(h.ax + h.ux * h.len, h.az + h.uz * h.len);
+  }
+  RING.pts.forEach(([x, z], i) => (i ? highways.lineTo(x, z) : highways.moveTo(x, z)));
+  highways.closePath();
+  const ramps = new Path2D();
+  for (const r of RAMPS) r.pts.forEach(([x, z], i) => (i ? ramps.lineTo(x, z) : ramps.moveTo(x, z)));
+  const lakes = new Path2D();
+  for (const l of OUTER_LAKES) {
+    lakes.moveTo(l.x + l.r, l.z);
+    lakes.arc(l.x, l.z, l.r, 0, Math.PI * 2);
+  }
+  // Mountains beyond the Ring: everything outside a hexagon a little bigger than it.
+  const hills = new Path2D();
+  hills.rect(OUTER.x0 - 2000, OUTER.z0 - 2000, OUTER.x1 - OUTER.x0 + 4000, OUTER.z1 - OUTER.z0 + 4000);
+  const angles = HEX.map(([nx, nz]) => Math.atan2(nz, nx)).sort((a, b) => b - a);
+  const R = (RING_APOTHEM + 450) / Math.cos(Math.PI / 6);
+  angles.forEach((a, i) => {
+    const b = i + 1 < angles.length ? angles[i + 1] : angles[0] - 2 * Math.PI;
+    const m = (a + b) / 2;
+    if (i === 0) hills.moveTo(Math.cos(m) * R, Math.sin(m) * R);
+    else hills.lineTo(Math.cos(m) * R, Math.sin(m) * R);
+  });
+  hills.closePath();
+  return { highways, ramps, lakes, hills };
+}
+
 function arrow(g: CanvasRenderingContext2D, x: number, y: number, size: number, angle: number, fill: string) {
   g.save();
   g.translate(x, y);
@@ -104,23 +142,67 @@ function arrow(g: CanvasRenderingContext2D, x: number, y: number, size: number, 
 
 /** Pins closer than this to the car count as "you're there". */
 const ARRIVED = 25;
+/** Re-plan the way when the car is this far off it (a wrong turn)… */
+const OFF_ROUTE = 35;
+/** …or every so often anyway. */
+const REPLAN_SECONDS = 5;
 
-/** Stroke a route (world points) as a bold blue line with a dark edge, `w` = line width. */
-function routeLine(g: CanvasRenderingContext2D, pts: Vec2[], toX: (x: number) => number, toZ: (z: number) => number, w: number) {
+/** Distance from a point to a polyline. */
+function distToPath(x: number, z: number, pts: Vec2[]) {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [a, b] = [pts[i], pts[i + 1]];
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const l2 = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / l2));
+    best = Math.min(best, Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t));
+  }
+  return best;
+}
+
+/** Paint the map in world metres: the caller has set a transform (metres → screen). */
+function paintWorld(g: CanvasRenderingContext2D, middle: HTMLCanvasElement, paths: ReturnType<typeof countryPaths>, pxPerM: number) {
+  g.fillStyle = GRASS;
+  g.fillRect(OUTER.x0 - 2000, OUTER.z0 - 2000, OUTER.x1 - OUTER.x0 + 4000, OUTER.z1 - OUTER.z0 + 4000);
+  g.fillStyle = '#8a9a6a';
+  g.fill(paths.hills, 'evenodd');
+  g.drawImage(middle, WORLD.x0, WORLD.z0, WORLD.x1 - WORLD.x0, WORLD.z1 - WORLD.z0);
+  g.fillStyle = '#4b93cf';
+  g.fill(paths.lakes);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  // Roads at their real width, but never thinner than a few pixels.
+  const w = (metres: number, minPx: number) => Math.max(metres, minPx / pxPerM);
+  g.strokeStyle = 'rgba(40,40,40,0.55)';
+  g.lineWidth = w(12, 3.5) + 3 / pxPerM;
+  g.stroke(paths.ramps);
+  g.lineWidth = w(30, 5) + 3 / pxPerM;
+  g.stroke(paths.highways);
+  g.strokeStyle = '#ffe48a';
+  g.lineWidth = w(12, 3.5);
+  g.stroke(paths.ramps);
+  g.strokeStyle = '#ffd23f';
+  g.lineWidth = w(30, 5);
+  g.stroke(paths.highways);
+}
+
+/** The way as a bold blue line (world metres; caller's transform). */
+function routeLine(g: CanvasRenderingContext2D, pts: Vec2[], widthM: number) {
   g.lineJoin = 'round';
   g.lineCap = 'round';
   g.beginPath();
-  pts.forEach(([x, z], i) => (i ? g.lineTo(toX(x), toZ(z)) : g.moveTo(toX(x), toZ(z))));
+  pts.forEach(([x, z], i) => (i ? g.lineTo(x, z) : g.moveTo(x, z)));
   g.strokeStyle = '#0b3d91';
-  g.lineWidth = w * 1.6;
+  g.lineWidth = widthM * 1.6;
   g.stroke();
   g.strokeStyle = '#38a3ff';
-  g.lineWidth = w;
+  g.lineWidth = widthM;
   g.stroke();
 }
 
 export class Minimap {
-  private world = drawWorld();
+  private middle = drawMiddle();
+  private paths = countryPaths();
   private mini: HTMLCanvasElement;
   private big: HTMLCanvasElement;
   private overlay: HTMLElement;
@@ -132,9 +214,13 @@ export class Minimap {
   private dest: Vec2 | null = null;
   private route: Vec2[] | null = null;
   private routeAge = 0;
-  /** Car pose when the big map was drawn (for redrawing after a tap). */
-  private bigCar = { x: 0, z: 0, fx: 0, fz: 1 };
-  private bigScale = 1;
+  /** Car pose (for the big map). */
+  private car = { x: 0, z: 0, fx: 0, fz: 1 };
+  /** Big map view: centre (world metres) and zoom (CSS px per metre). */
+  private view = { x: 0, z: 0, zoom: 0.25 };
+  private pointers = new Map<number, { x: number; y: number }>();
+  private gesture: { moved: number; start: number; pinch: number; zoom: number } | null = null;
+  private drawQueued = false;
 
   constructor(root: HTMLElement, private readonly onToggle: (open: boolean) => void, private readonly onArrive: () => void = () => {}) {
     const wrap = document.createElement('div');
@@ -147,10 +233,32 @@ export class Minimap {
       this.open(true);
     });
 
-    // Big map: tap it to drop a pin (tap again to move it); Go! (or tapping outside) closes it.
+    // Big map: swipe to move, pinch (or ＋/−) to zoom, tap to drop a pin (tap again to
+    // move it); Go! (or tapping outside the map) closes it.
     this.overlay = document.createElement('div');
     this.overlay.className = 'bigmap';
+    const mapBox = document.createElement('div');
+    mapBox.className = 'bigmap-box';
     this.big = document.createElement('canvas');
+    const zoomBar = document.createElement('div');
+    zoomBar.className = 'bigmap-zoom';
+    const zoomBtn = (label: string, f: () => void) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        f();
+      });
+      zoomBar.appendChild(b);
+    };
+    zoomBtn('＋', () => this.zoomBy(1.6));
+    zoomBtn('−', () => this.zoomBy(1 / 1.6));
+    zoomBtn('📍 Me', () => {
+      this.view.x = this.car.x;
+      this.view.z = this.car.z;
+      this.redraw();
+    });
+    mapBox.append(this.big, zoomBar);
     const side = document.createElement('div');
     side.className = 'bigmap-side';
     this.hint = document.createElement('div');
@@ -162,46 +270,133 @@ export class Minimap {
     this.clearBtn.className = 'big gray';
     this.clearBtn.textContent = '✖ Clear';
     side.append(this.hint, go, this.clearBtn);
-    this.overlay.append(this.big, side);
+    this.overlay.append(mapBox, side);
     root.appendChild(this.overlay);
     this.overlay.addEventListener('click', (e) => {
       e.stopPropagation();
       this.open(false);
     });
+    mapBox.addEventListener('click', (e) => e.stopPropagation());
     side.addEventListener('click', (e) => e.stopPropagation());
     go.addEventListener('click', () => this.open(false));
     this.clearBtn.addEventListener('click', () => {
       this.setDest(null);
-      this.redrawBig();
+      this.redraw();
     });
-    this.big.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const s = S * this.bigScale;
-      let wx = WORLD.x0 + e.offsetX / s, wz = WORLD.z0 + e.offsetY / s;
-      // A tap on (or right next to) a place's icon goes to that place.
-      const snap = Math.max(30, 26 / s);
-      for (const d of DESTINATIONS) if (Math.hypot(d.x - wx, d.z - wz) < snap) (wx = d.x), (wz = d.z);
-      this.setDest([wx, wz]);
-      this.redrawBig();
-    });
+    this.setupGestures();
     this.updateHint();
+  }
+
+  private setupGestures() {
+    const c = this.big;
+    c.style.touchAction = 'none';
+    const local = (e: PointerEvent) => {
+      const r = c.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    const spread = () => {
+      const [a, b] = [...this.pointers.values()];
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+    c.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      c.setPointerCapture(e.pointerId);
+      this.pointers.set(e.pointerId, local(e));
+      if (this.pointers.size === 1) this.gesture = { moved: 0, start: performance.now(), pinch: 0, zoom: this.view.zoom };
+      else if (this.pointers.size === 2 && this.gesture) (this.gesture.pinch = spread()), (this.gesture.zoom = this.view.zoom), (this.gesture.moved += 100);
+    });
+    c.addEventListener('pointermove', (e) => {
+      const prev = this.pointers.get(e.pointerId);
+      if (!prev || !this.gesture) return;
+      const p = local(e);
+      if (this.pointers.size === 1) {
+        // Swipe: move the map with the finger.
+        this.view.x -= (p.x - prev.x) / this.view.zoom;
+        this.view.z -= (p.y - prev.y) / this.view.zoom;
+        this.gesture.moved += Math.hypot(p.x - prev.x, p.y - prev.y);
+      }
+      this.pointers.set(e.pointerId, p);
+      if (this.pointers.size === 2 && this.gesture.pinch > 0) {
+        // Pinch: zoom about the middle of the two fingers.
+        const [a, b] = [...this.pointers.values()];
+        this.zoomAbout(this.gesture.zoom * (spread() / this.gesture.pinch) / this.view.zoom, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      }
+      this.redraw();
+    });
+    const end = (e: PointerEvent) => {
+      const p = this.pointers.get(e.pointerId);
+      this.pointers.delete(e.pointerId);
+      if (!p || !this.gesture || this.pointers.size > 0) return;
+      // A quick tap that barely moved drops the pin.
+      if (this.gesture.moved < 10 && performance.now() - this.gesture.start < 600) this.tapAt(p.x, p.y);
+      this.gesture = null;
+    };
+    c.addEventListener('pointerup', end);
+    c.addEventListener('pointercancel', end);
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const p = { x: e.offsetX, y: e.offsetY };
+      this.zoomAbout(Math.exp(-e.deltaY * 0.002), p.x, p.y);
+      this.redraw();
+    }, { passive: false });
+  }
+
+  /** The big map's size in CSS pixels. */
+  private bigSize() {
+    return { w: this.big.clientWidth || 300, h: this.big.clientHeight || 300 };
+  }
+
+  private toWorld(px: number, py: number) {
+    const { w, h } = this.bigSize();
+    return { x: this.view.x + (px - w / 2) / this.view.zoom, z: this.view.z + (py - h / 2) / this.view.zoom };
+  }
+
+  private clampView() {
+    const { w, h } = this.bigSize();
+    // From the whole map down to street level.
+    const minZoom = Math.min(w / (OUTER.x1 - OUTER.x0), h / (OUTER.z1 - OUTER.z0));
+    this.view.zoom = Math.max(minZoom, Math.min(2, this.view.zoom));
+    this.view.x = Math.max(OUTER.x0, Math.min(OUTER.x1, this.view.x));
+    this.view.z = Math.max(OUTER.z0, Math.min(OUTER.z1, this.view.z));
+  }
+
+  private zoomAbout(k: number, px: number, py: number) {
+    const before = this.toWorld(px, py);
+    this.view.zoom *= k;
+    this.clampView();
+    const after = this.toWorld(px, py);
+    this.view.x += before.x - after.x;
+    this.view.z += before.z - after.z;
+    this.clampView();
+  }
+
+  private zoomBy(k: number) {
+    const { w, h } = this.bigSize();
+    this.zoomAbout(k, w / 2, h / 2);
+    this.redraw();
+  }
+
+  private tapAt(px: number, py: number) {
+    let { x, z } = this.toWorld(px, py);
+    // A tap on (or right next to) a place's icon goes to that place.
+    const snap = 26 / this.view.zoom;
+    for (const d of DESTINATIONS) if (Math.hypot(d.x - x, d.z - z) < snap) (x = d.x), (z = d.z);
+    this.setDest([x, z]);
+    this.redraw();
   }
 
   private setDest(d: Vec2 | null) {
     this.dest = d;
-    this.route = d ? findRoute(this.bigCar.x, this.bigCar.z, d[0], d[1]) : null;
+    this.route = d ? findRoute(this.car.x, this.car.z, d[0], d[1]) : null;
     this.routeAge = 0;
     this.updateHint();
   }
 
   private updateHint() {
-    this.hint.textContent = this.dest ? '📍 Tap the map again to move the pin' : '📍 Tap the map to pick where to go';
+    this.hint.textContent = this.dest
+      ? '📍 Tap again to move the pin. Swipe to look around, pinch to zoom.'
+      : '📍 Tap the map to pick where to go. Swipe to look around, pinch to zoom.';
     this.clearBtn.style.display = this.dest ? '' : 'none';
-  }
-
-  private redrawBig() {
-    const c = this.bigCar;
-    this.drawBig(c.x, c.z, c.fx, c.fz);
   }
 
   open(on: boolean) {
@@ -211,14 +406,101 @@ export class Minimap {
     this.onToggle(on);
   }
 
+  /** Called with the car's pose when the big map opens: start centred on the car. */
+  drawBig(x: number, z: number, fx: number, fz: number) {
+    this.car = { x, z, fx, fz };
+    this.view = { x, z, zoom: 0.3 };
+    if (this.dest && !this.route) this.route = findRoute(x, z, this.dest[0], this.dest[1]);
+    requestAnimationFrame(() => {
+      this.clampView();
+      this.paintBig();
+    });
+  }
+
+  private redraw() {
+    if (this.drawQueued) return;
+    this.drawQueued = true;
+    requestAnimationFrame(() => {
+      this.drawQueued = false;
+      this.paintBig();
+    });
+  }
+
+  private paintBig() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const { w, h } = this.bigSize();
+    if (this.big.width !== Math.round(w * dpr) || this.big.height !== Math.round(h * dpr)) {
+      this.big.width = Math.round(w * dpr);
+      this.big.height = Math.round(h * dpr);
+    }
+    const g = this.big.getContext('2d')!;
+    const { x: cx, z: cz, zoom } = this.view;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.save();
+    g.translate(w / 2, h / 2);
+    g.scale(zoom, zoom);
+    g.translate(-cx, -cz);
+    paintWorld(g, this.middle, this.paths, zoom);
+    if (this.route) routeLine(g, this.route, Math.max(8, 5 / zoom));
+    g.restore();
+    const X = (wx: number) => w / 2 + (wx - cx) * zoom, Z = (wz: number) => h / 2 + (wz - cz) * zoom;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const small = Math.min(w, h);
+    // Highway names when zoomed in enough to read them.
+    if (zoom > 0.12) {
+      g.font = `bold ${Math.max(11, small * 0.026)}px -apple-system, Helvetica, sans-serif`;
+      g.lineWidth = 3;
+      g.strokeStyle = 'rgba(0,0,0,0.6)';
+      g.fillStyle = '#ffe9a0';
+      for (const hw of HIGHWAYS)
+        for (const t of [0.25, 0.5, 0.75]) {
+          const lx = X(hw.ax + hw.ux * hw.len * t), ly = Z(hw.az + hw.uz * hw.len * t);
+          if (lx < 0 || lx > w || ly < 0 || ly > h) continue;
+          g.strokeText(hw.name, lx, ly);
+          g.fillText(hw.name, lx, ly);
+        }
+    }
+    for (const d of DESTINATIONS) {
+      const dx = X(d.x), dy = Z(d.z);
+      if (dx < -60 || dx > w + 60 || dy < -60 || dy > h + 60) continue;
+      g.font = `${Math.max(22, small * 0.07)}px sans-serif`;
+      g.fillText(d.icon, dx, dy);
+      g.font = `bold ${Math.max(13, small * 0.035)}px -apple-system, Helvetica, sans-serif`;
+      g.lineWidth = 4;
+      g.strokeStyle = 'rgba(0,0,0,0.65)';
+      g.fillStyle = '#ffffff';
+      const half = g.measureText(d.label).width / 2 + 4;
+      const lx = Math.min(w - half, Math.max(half, dx));
+      g.strokeText(d.label, lx, dy + Math.max(20, small * 0.065));
+      g.fillText(d.label, lx, dy + Math.max(20, small * 0.065));
+    }
+    const { x, z, fx, fz } = this.car;
+    g.font = `bold ${Math.max(13, small * 0.035)}px -apple-system, Helvetica, sans-serif`;
+    g.fillStyle = '#ffffff';
+    g.strokeText('YOU', X(x), Z(z) - Math.max(22, small * 0.06));
+    g.fillText('YOU', X(x), Z(z) - Math.max(22, small * 0.06));
+    arrow(g, X(x), Z(z), Math.max(12, small * 0.04), Math.atan2(fx, -fz), '#1e88ff');
+    if (this.dest) {
+      // Pin with its point on the spot.
+      g.font = `${Math.max(26, small * 0.075)}px sans-serif`;
+      g.textBaseline = 'bottom';
+      g.fillText('📍', X(this.dest[0]), Z(this.dest[1]) + Math.max(3, small * 0.008));
+      g.textBaseline = 'middle';
+    }
+  }
+
   /** Mini-map: centred on the car, rotated so straight ahead is up. */
   update(x: number, z: number, fx: number, fz: number, dt = 1 / 60) {
-    // Directions: re-plan now and then (so a wrong turn gets a new way), and stop on arrival.
+    this.car = { x, z, fx, fz };
+    // Directions: re-plan after a wrong turn (or now and then), and stop on arrival.
     if (this.dest) {
+      this.routeAge += dt;
       if (Math.hypot(this.dest[0] - x, this.dest[1] - z) < ARRIVED) {
         this.setDest(null);
         this.onArrive();
-      } else if ((this.routeAge += dt) > 0.6) {
+      } else if (!this.route || this.routeAge > REPLAN_SECONDS || (this.routeAge > 0.5 && distToPath(x, z, this.route.slice(1)) > OFF_ROUTE)) {
         this.routeAge = 0;
         this.route = findRoute(x, z, this.dest[0], this.dest[1]);
       }
@@ -231,32 +513,29 @@ export class Minimap {
     if (this.mini.width !== size) this.mini.width = this.mini.height = size;
     const g = this.mini.getContext('2d')!;
     const r = size / 2;
-    const k = size / (VIEW_METRES * S); // canvas px per map px
+    const k = size / VIEW_METRES; // canvas px per metre
     const rot = -Math.PI / 2 - Math.atan2(fz, fx);
     g.clearRect(0, 0, size, size);
     g.save();
     g.beginPath();
     g.arc(r, r, r, 0, Math.PI * 2);
     g.clip();
-    g.fillStyle = '#7fb35d';
-    g.fillRect(0, 0, size, size);
     g.translate(r, r);
     g.rotate(rot);
     g.scale(k, k);
-    g.translate(-(x - WORLD.x0) * S, -(z - WORLD.z0) * S);
+    g.translate(-x, -z);
     g.imageSmoothingEnabled = true;
-    g.drawImage(this.world, 0, 0);
+    paintWorld(g, this.middle, this.paths, k / dpr);
     if (this.route) {
       // From the car itself, then along the planned way.
-      const pts: Vec2[] = [[x, z], ...this.route.slice(1)];
-      routeLine(g, pts, (wx) => (wx - WORLD.x0) * S, (wz) => (wz - WORLD.z0) * S, (size * 0.045) / k);
+      routeLine(g, [[x, z], ...this.route.slice(1)], (size * 0.045) / k);
     }
     g.restore();
 
     // Destinations: on the map if close, otherwise pinned to the rim pointing the way.
     const cos = Math.cos(rot), sin = Math.sin(rot);
     const toScreen = (wx: number, wz: number) => {
-      const dx = (wx - x) * S * k, dz = (wz - z) * S * k;
+      const dx = (wx - x) * k, dz = (wz - z) * k;
       return [r + dx * cos - dz * sin, r + dx * sin + dz * cos] as const;
     };
     g.textAlign = 'center';
@@ -290,53 +569,5 @@ export class Minimap {
     g.fillText('N', px, py);
     // The car
     arrow(g, r, r, size * 0.07, 0, '#1e88ff');
-  }
-
-  /** Full world map (north up) with labels; drawn when opened. */
-  drawBig(x: number, z: number, fx: number, fz: number) {
-    this.bigCar = { x, z, fx, fz };
-    if (this.dest && !this.route) this.route = findRoute(x, z, this.dest[0], this.dest[1]);
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    // Leave room beside the map (landscape) for the hint and buttons.
-    const cw = window.innerWidth * 0.94 - Math.min(300, window.innerWidth * 0.3), ch = window.innerHeight * 0.9;
-    const scale = Math.min(cw / this.world.width, ch / this.world.height);
-    this.bigScale = scale;
-    const w = this.world.width * scale, h = this.world.height * scale;
-    this.big.style.width = `${w}px`;
-    this.big.style.height = `${h}px`;
-    this.big.width = Math.round(w * dpr);
-    this.big.height = Math.round(h * dpr);
-    const g = this.big.getContext('2d')!;
-    g.scale(dpr, dpr);
-    g.drawImage(this.world, 0, 0, w, h);
-    const X = (wx: number) => (wx - WORLD.x0) * S * scale, Z = (wz: number) => (wz - WORLD.z0) * S * scale;
-    if (this.route) routeLine(g, this.route, X, Z, Math.max(3, h * 0.012));
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    for (const d of DESTINATIONS) {
-      g.font = `${Math.max(22, h * 0.07)}px sans-serif`;
-      g.fillText(d.icon, X(d.x), Z(d.z));
-      g.font = `bold ${Math.max(13, h * 0.035)}px -apple-system, Helvetica, sans-serif`;
-      g.lineWidth = 4;
-      g.strokeStyle = 'rgba(0,0,0,0.65)';
-      g.fillStyle = '#ffffff';
-      // Keep labels inside the map (Thunder Mountain is near the edge).
-      const half = g.measureText(d.label).width / 2 + 4;
-      const lx = Math.min(w - half, Math.max(half, X(d.x)));
-      g.strokeText(d.label, lx, Z(d.z) + Math.max(20, h * 0.065));
-      g.fillText(d.label, lx, Z(d.z) + Math.max(20, h * 0.065));
-    }
-    g.font = `bold ${Math.max(13, h * 0.035)}px -apple-system, Helvetica, sans-serif`;
-    g.fillStyle = '#ffffff';
-    g.strokeText('YOU', X(x), Z(z) - Math.max(22, h * 0.06));
-    g.fillText('YOU', X(x), Z(z) - Math.max(22, h * 0.06));
-    arrow(g, X(x), Z(z), Math.max(12, h * 0.04), Math.atan2(fx, -fz), '#1e88ff');
-    if (this.dest) {
-      // Pin with its point on the spot.
-      g.font = `${Math.max(26, h * 0.075)}px sans-serif`;
-      g.textBaseline = 'bottom';
-      g.fillText('📍', X(this.dest[0]), Z(this.dest[1]) + Math.max(3, h * 0.008));
-      g.textBaseline = 'middle';
-    }
   }
 }

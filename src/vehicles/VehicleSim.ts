@@ -34,6 +34,15 @@ export interface WorldQueries {
 }
 
 const G = 9.81;
+/** Drift tuning, [asphalt, loose ground]: how much the rear tyres' side stiffness and grip drop. */
+export const DRIFT = {
+  side: [0.5, 0.35],
+  slip: [0.55, 0.2],
+  /** Biggest slide angle (rad) before the rear tyres bite again. */
+  maxSlip: [0.3, 0.42],
+  /** Top yaw rate while drifting (rad/s). */
+  maxYaw: [1.3, 1.5],
+};
 const tmpUp = { x: 0, y: 0, z: 0 };
 
 /** Wheel order: 0 front-left, 1 front-right, 2 rear-left, 3 rear-right. Car local: +x left, +z forward. */
@@ -57,6 +66,8 @@ export class VehicleSim {
   private loopPhase = 0;
   private loopLastAngle = 0;
   private loopAssist = false;
+  /** 0..1: how far into a drift the car is (rear tyres let go while turning on the gas). */
+  drift = 0;
 
   constructor(private readonly physics: Physics, readonly spec: VehicleSpec, x: number, y: number, z: number, heading: number) {
     const world = physics.world;
@@ -270,6 +281,29 @@ export class VehicleSim {
       ctrl.setWheelBrake(i, hold ? mass * 0.5 : 0);
     }
 
+    // --- drifting: turn hard with the gas down at speed and the back end slides out.
+    // Loose ground (dirt, grass, sand) lets go more easily and further than asphalt.
+    // The slide angle is self-limiting (kids don't counter-steer): as it nears the
+    // limit the rear grip comes back, so the car holds a drift instead of spinning.
+    let loose = 0;
+    for (const i of [2, 3]) if (ctrl.wheelIsInContact(i) && SURFACES[this.wheelSurface[i]].grip < 2) loose += 0.5;
+    const li = loose > 0.4 ? 1 : 0;
+    const steerAmt = Math.abs(input.steer);
+    const wantDrift = contact >= 3 && !this.onLoop && throttle > 0.3 && steerAmt > 0.45 && v > 8 + (1 - loose) * 4;
+    this.drift = clamp(this.drift + (wantDrift ? dt * 3 : -dt * 2.2), 0, 1);
+    const lv0 = body.linvel(), f0 = this.forward();
+    const sp0 = Math.hypot(lv0.x, lv0.z);
+    const slip = sp0 > 3 ? Math.acos(clamp((lv0.x * f0.x + lv0.z * f0.z) / (sp0 * (Math.hypot(f0.x, f0.z) || 1)), -1, 1)) : 0;
+    const room = clamp((DRIFT.maxSlip[li] - slip) / (DRIFT.maxSlip[li] * 0.35), 0, 1);
+    const let_go = this.drift * room;
+    // Coming out of a slide (not asking for one), the rear tyres bite harder to straighten up.
+    const catchUp = wantDrift ? 0 : clamp(slip / 0.25, 0, 1) * 0.8;
+    for (const i of [2, 3]) {
+      ctrl.setWheelSideFrictionStiffness(i, 1 - let_go * DRIFT.side[li] + catchUp);
+      const g = SURFACES[this.wheelSurface[i]].grip * spec.grip;
+      ctrl.setWheelFrictionSlip(i, g * (1 - let_go * DRIFT.slip[li] + catchUp * 0.5));
+    }
+
     ctrl.updateVehicle(dt);
 
     // --- body forces (cleared each step)
@@ -306,6 +340,16 @@ export class VehicleSim {
       const k = mass * 3;
       const av = body.angvel();
       body.addTorque({ x: -up.z * k - av.x * mass * 0.6, y: -av.y * mass * 0.2, z: up.x * k - av.z * mass * 0.6 }, true);
+    }
+
+    // While drifting: cap the spin rate, and keep the speed up through the slide (that's the fun part).
+    if (this.drift > 0.02 && contact >= 2) {
+      const av = body.angvel();
+      const maxYaw = DRIFT.maxYaw[li];
+      if (Math.abs(av.y) > maxYaw) body.addTorque({ x: 0, y: -(av.y - Math.sign(av.y) * maxYaw) * mass * 20, z: 0 }, true);
+      const fwd = this.forward();
+      const push = mass * (3 + 4 * loose) * this.drift * throttle;
+      if (v < top * 0.9) body.addForce({ x: fwd.x * push, y: 0, z: fwd.z * push }, true);
     }
 
     // Lateral slip estimate for skid effects.

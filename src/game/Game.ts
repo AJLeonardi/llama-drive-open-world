@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { FIXED_DT, Physics, initPhysics } from '../physics/Physics';
 import { Impact, ImpactTracker } from '../physics/Impacts';
 import { World } from '../world/World';
-import { SPAWN, WATER_LEVEL, isDeepWater, waterDepth } from '../world/layout';
+import { SPAWN, isDeepWater, waterLevelAt } from '../world/layout';
 import { Vehicle } from '../vehicles/Vehicle';
 import { CarId } from '../vehicles/VehicleSpec';
 import { NO_INPUT } from '../vehicles/VehicleSim';
@@ -223,6 +223,7 @@ export class Game {
     const at = spot ?? { x: SPAWN.x, y: 0, z: SPAWN.z, heading: SPAWN.heading };
     this.safeSpot = { ...at };
     this.endUnderwater();
+    this.world.outer.ensureAround(at); // out in highway country the ground may not be built yet
     this.car = new Vehicle(this.physics, this.scene, id, at.x, at.y + 0.4, at.z, at.heading);
     if (spot) this.world.props.stream(at);
     if (this.tracker) this.tracker.setCar(this.car.sim.collider);
@@ -260,7 +261,7 @@ export class Game {
     // The underwater camera circles outside the car: show its roof and outside windows.
     this.car!.setCockpitView(false);
     const p = this.car!.model.root.position;
-    this.underwater.start(tmpV.set(p.x, Math.max(p.y, WATER_LEVEL - 4), p.z));
+    this.underwater.start(tmpV.set(p.x, Math.max(p.y, (waterLevelAt(p.x, p.z) ?? p.y) - 4), p.z));
     this.car!.sim.body.setLinearDamping(2.5);
     this.car!.sim.body.setAngularDamping(2);
     this.sky.visible = false;
@@ -380,7 +381,6 @@ export class Game {
     const f = sim.forward();
     this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z, dt);
     this.hud.setSpeed(sim.speed);
-    this.hud.setHealth(car.health);
     this.hud.setBoost(sim.boostTimer > 1.6);
   }
 
@@ -484,7 +484,7 @@ export class Game {
       if (car.wrecked) {
         this.state = 'wrecked';
         this.stateTimer = 0;
-      } else if (isDeepWater(p.x, p.z) && p.y < WATER_LEVEL - 0.3) {
+      } else if (isDeepWater(p.x, p.z) && p.y < (waterLevelAt(p.x, p.z) ?? -Infinity) - 0.3) {
         this.startSinking();
         return false;
       } else if (p.y < -60) {
@@ -494,7 +494,7 @@ export class Game {
       // Remember where the car is on its wheels on dry land, for respawning here.
       const up = car.sim.up();
       this.safeTimer -= dt;
-      if (this.safeTimer <= 0 && car.sim.wheelsInContact >= 3 && up.y > 0.85 && waterDepth(p.x, p.z) === 0) {
+      if (this.safeTimer <= 0 && car.sim.wheelsInContact >= 3 && up.y > 0.85 && waterLevelAt(p.x, p.z) === null) {
         this.safeTimer = 0.5;
         const f = car.sim.forward();
         this.safeSpot = { x: p.x, y: p.y, z: p.z, heading: Math.atan2(f.x, f.z) };
@@ -507,7 +507,7 @@ export class Game {
       this.stateTimer += dt;
       // Let the car finish tumbling before showing the message.
       if (this.stateTimer > 1.4 && this.hud.current !== 'wrecked') this.hud.show('wrecked');
-      if (isDeepWater(p.x, p.z) && p.y < WATER_LEVEL - 0.3) this.startSinking();
+      if (isDeepWater(p.x, p.z) && p.y < (waterLevelAt(p.x, p.z) ?? -Infinity) - 0.3) this.startSinking();
     } else if (this.state === 'sinking') {
       this.stateTimer += dt;
       if (this.stateTimer > SINK_SECONDS) {

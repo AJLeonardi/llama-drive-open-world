@@ -129,14 +129,5 @@ export function buildHighway(batch: StaticBatch, physics: Physics, scene: THREE.
     props.push({ kind: 'tree', x, y: terrainHeight(terrain, x, z) - 0.3, z, rot: rng() * 6.28 });
   }
 
-  // Invisible walls at the edge of the world.
-  const W = WORLD;
-  for (const [cx, cz, hx, hz] of [
-    [(W.x0 + W.x1) / 2, W.z0, (W.x1 - W.x0) / 2, 2], [(W.x0 + W.x1) / 2, W.z1, (W.x1 - W.x0) / 2, 2],
-    [W.x0, 0, 2, (W.z1 - W.z0) / 2], [W.x1, 0, 2, (W.z1 - W.z0) / 2],
-  ]) {
-    const col = physics.world.createCollider(RAPIER.ColliderDesc.cuboid(hx, 60, hz).setTranslation(cx, 30, cz));
-    physics.setOwner(col, { kind: 'static', material: 'concrete' });
-  }
   return { props };
 }
