@@ -9,6 +9,8 @@ import {
 import { HIGHWAYS, OUTER_LAKES, RAMPS, RING } from '../world/outer';
 import { RING_APOTHEM, HEX } from '../world/bounds';
 import { findRoute } from '../world/route';
+import { desertWeight } from '../world/biomes';
+import { CANYON } from '../world/hills';
 import type { Vec2 } from '../util/math';
 
 const S = 0.5; // pixels per metre in the picture of the middle
@@ -29,6 +31,7 @@ export const DESTINATIONS: Destination[] = [
   { x: LOOP.x, z: LOOP.z - 30, icon: '🎢', label: 'Loop' },
   { x: (DEMO_PARK.x0 + DEMO_PARK.x1) / 2, z: (DEMO_PARK.z0 + DEMO_PARK.z1) / 2, icon: '💥', label: 'Demolition Park' },
   { x: MOUNTAIN.x, z: MOUNTAIN.z, icon: '⛰️', label: 'Thunder Mountain' },
+  { x: CANYON.x, z: (CANYON.z0 + CANYON.z1) / 2, icon: '🏜️', label: 'Red Canyon' },
 ];
 
 const ROAD_STYLE: Record<Road['kind'], [string, number]> = {
@@ -88,6 +91,30 @@ function drawMiddle(): HTMLCanvasElement {
       if (r.closed) g.closePath();
       g.stroke();
     }
+  return c;
+}
+
+/**
+ * The land itself, coloured by region (green country, sandy desert…), one pixel per
+ * 40 m over the whole map; drawn smoothed, under everything else.
+ */
+function drawLand(): HTMLCanvasElement {
+  const M = 40;
+  const w = Math.round((OUTER.x1 - OUTER.x0) / M), h = Math.round((OUTER.z1 - OUTER.z0) / M);
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(w, h);
+  const grass = [0x7f, 0xb3, 0x5d], sand = [0xe0, 0xb4, 0x78];
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const d = desertWeight(OUTER.x0 + (i + 0.5) * M, OUTER.z0 + (j + 0.5) * M);
+      const k = (j * w + i) * 4;
+      for (let ch = 0; ch < 3; ch++) img.data[k + ch] = grass[ch] + (sand[ch] - grass[ch]) * d;
+      img.data[k + 3] = 255;
+    }
+  g.putImageData(img, 0, 0);
   return c;
 }
 
@@ -161,9 +188,11 @@ function distToPath(x: number, z: number, pts: Vec2[]) {
 }
 
 /** Paint the map in world metres: the caller has set a transform (metres → screen). */
-function paintWorld(g: CanvasRenderingContext2D, middle: HTMLCanvasElement, paths: ReturnType<typeof countryPaths>, pxPerM: number) {
+function paintWorld(g: CanvasRenderingContext2D, middle: HTMLCanvasElement, land: HTMLCanvasElement, paths: ReturnType<typeof countryPaths>, pxPerM: number) {
   g.fillStyle = GRASS;
   g.fillRect(OUTER.x0 - 2000, OUTER.z0 - 2000, OUTER.x1 - OUTER.x0 + 4000, OUTER.z1 - OUTER.z0 + 4000);
+  g.imageSmoothingEnabled = true;
+  g.drawImage(land, OUTER.x0, OUTER.z0, OUTER.x1 - OUTER.x0, OUTER.z1 - OUTER.z0);
   g.fillStyle = '#8a9a6a';
   g.fill(paths.hills, 'evenodd');
   g.drawImage(middle, WORLD.x0, WORLD.z0, WORLD.x1 - WORLD.x0, WORLD.z1 - WORLD.z0);
@@ -202,6 +231,7 @@ function routeLine(g: CanvasRenderingContext2D, pts: Vec2[], widthM: number) {
 
 export class Minimap {
   private middle = drawMiddle();
+  private land = drawLand();
   private paths = countryPaths();
   private mini: HTMLCanvasElement;
   private big: HTMLCanvasElement;
@@ -441,7 +471,7 @@ export class Minimap {
     g.translate(w / 2, h / 2);
     g.scale(zoom, zoom);
     g.translate(-cx, -cz);
-    paintWorld(g, this.middle, this.paths, zoom);
+    paintWorld(g, this.middle, this.land, this.paths, zoom);
     if (this.route) routeLine(g, this.route, Math.max(8, 5 / zoom));
     g.restore();
     const X = (wx: number) => w / 2 + (wx - cx) * zoom, Z = (wz: number) => h / 2 + (wz - cz) * zoom;
@@ -525,7 +555,7 @@ export class Minimap {
     g.scale(k, k);
     g.translate(-x, -z);
     g.imageSmoothingEnabled = true;
-    paintWorld(g, this.middle, this.paths, k / dpr);
+    paintWorld(g, this.middle, this.land, this.paths, k / dpr);
     if (this.route) {
       // From the car itself, then along the planned way.
       routeLine(g, [[x, z], ...this.route.slice(1)], (size * 0.045) / k);

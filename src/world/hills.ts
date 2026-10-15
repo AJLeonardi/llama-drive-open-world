@@ -27,7 +27,7 @@ export function terrainBase(x: number, z: number) {
 }
 
 /** The south highway's canyon: red cliffs either side of the road for a stretch. */
-const CANYON = { x: -540, z0: 2300, z1: 3500 };
+export const CANYON = { x: -540, z0: 2300, z1: 3500 };
 
 /**
  * Desert landforms on top of the hills: long soft dunes, flat-topped mesas with cliff
