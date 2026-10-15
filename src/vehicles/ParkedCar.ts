@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { Physics, RAPIER } from '../physics/Physics';
 import { dentDepth, dentRadius, objectDamage } from '../damage/Damage';
-import { dentGeometry } from '../damage/Deformer';
+import { dentGeometry, scuffGeometry } from '../damage/Deformer';
 import { blob, cyl, keyframes, latheX, merge, rbox, sculpt } from './builders/geo';
 import { carMaterials } from './CarModel';
 import type { Particles } from '../fx/Particles';
@@ -13,10 +13,12 @@ const DIMS: Record<ParkedStyle, { hx: number; hy: number; hz: number; cy: number
   sedan: { hx: 0.9, hy: 0.62, hz: 2.3, cy: 0.82, mass: 1400 },
   taxi: { hx: 0.9, hy: 0.62, hz: 2.4, cy: 0.82, mass: 1500 },
   van: { hx: 1.0, hy: 1.05, hz: 2.6, cy: 1.25, mass: 2200 },
-  junk: { hx: 0.9, hy: 0.62, hz: 2.3, cy: 0.82, mass: 1200 },
+  // Junkers are stripped-out shells: light, so plowing through them wrecks them, not you.
+  junk: { hx: 0.9, hy: 0.62, hz: 2.3, cy: 0.82, mass: 650 },
 };
 /** Impulse that fully wrecks a parked car (scaled by the hitting car's mass). */
 const TOUGHNESS = 32000;
+const JUNK_TOUGHNESS = 9000;
 
 const shared = new Map<string, THREE.BufferGeometry>();
 
@@ -98,10 +100,12 @@ export class ParkedCar {
   private original: Float32Array | null = null;
   private ownGeometry = false;
   readonly mass: number;
+  readonly junk: boolean;
 
   constructor(private readonly physics: Physics, style: ParkedStyle, color: number, x: number, y: number, z: number, heading: number, wrecked = false) {
     const d = DIMS[style];
     this.mass = d.mass;
+    this.junk = style === 'junk';
     this.mesh = new THREE.Mesh(geometryFor(style, color), carMaterials().paint);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
@@ -151,7 +155,7 @@ export class ParkedCar {
   }
 
   hit(impulse: number, carMass: number, point: THREE.Vector3Like, normal: THREE.Vector3Like, particles: Particles) {
-    this.hp -= objectDamage(impulse, carMass, TOUGHNESS);
+    this.hp -= objectDamage(impulse, carMass, this.junk ? JUNK_TOUGHNESS : TOUGHNESS);
     const dv = impulse / this.mass;
     if (dv < 1) return;
     // Normal points from the player's car toward this car — push the dent along it.
@@ -161,6 +165,7 @@ export class ParkedCar {
     const q = this.mesh.quaternion.clone().invert();
     const dir = new THREE.Vector3(normal.x, normal.y, normal.z).applyQuaternion(q).normalize();
     this.dentLocal(p, dir, dentDepth(dv * 1.2), dentRadius(dv));
+    scuffGeometry(this.mesh.geometry, this.original!, p, dentRadius(dv) * 1.3, Math.min(1, dv / 10));
     if (dv > 3) particles.sparksAt(point, Math.min(30, Math.round(dv * 2)));
   }
 

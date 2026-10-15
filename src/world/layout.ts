@@ -22,7 +22,7 @@ export interface Road {
 
 export const BOSTON: AABB2 = { x0: -2360, z0: -460, x1: -1440, z1: 460 };
 export const NYC: AABB2 = { x0: 1440, z0: -460, x1: 2360, z1: 460 };
-export const DEMO_PARK: AABB2 = { x0: 460, z0: 270, x1: 740, z1: 500 };
+export const DEMO_PARK: AABB2 = { x0: 440, z0: 270, x1: 780, z1: 640 };
 export const DEMO_PARK_GATE = { x0: 560, x1: 640 };
 
 export const TRACK = { cx: -600, cz: -420, halfStraight: 150, radius: 85, width: 18 };
@@ -232,7 +232,9 @@ export const BOOST_PADS: BoostPad[] = [
   { x: -500, z: 7, heading: Math.PI / 2, length: 10, width: 6 },
   { x: 300, z: -7, heading: -Math.PI / 2, length: 10, width: 6 },
   { x: LOOP.x + 70, z: LOOP.z - LOOP.lateral, heading: -Math.PI / 2, length: 10, width: 6 }, // lines up with the loop entry lane
-  { x: 520, z: 450, heading: Math.PI / 2, length: 10, width: 8 },
+  // Demolition park: one before each mega ramp
+  { x: 478, z: 440, heading: Math.PI / 2, length: 10, width: 8 },
+  { x: 463, z: 560, heading: Math.PI / 2, length: 10, width: 8 },
 ];
 
 /** Bridges where roads cross the river: flat decks at road level. */

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LOOP_GROUPS, Physics, RAPIER } from '../physics/Physics';
+import { Physics, RAPIER } from '../physics/Physics';
 import { JUMP, LOOP, TRACK } from './layout';
 import { StaticBatch } from './batch';
 import { box } from '../vehicles/builders/geo';
@@ -7,7 +7,7 @@ import { textPanel, twoSidedSign } from './landmarks';
 import type { PropSpawn } from './propModels';
 
 /** Static mesh + trimesh collider from the same triangles. */
-function solid(batch: StaticBatch, physics: Physics, material: string, pos: number[], idx: number[], colors: number[], groups?: number) {
+function solid(batch: StaticBatch, physics: Physics, material: string, pos: number[], idx: number[], colors: number[], isLoop = false) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -15,33 +15,46 @@ function solid(batch: StaticBatch, physics: Physics, material: string, pos: numb
   g.computeVertexNormals();
   batch.add(material, g);
   const desc = RAPIER.ColliderDesc.trimesh(new Float32Array(pos), new Uint32Array(idx)).setFriction(0.9);
-  if (groups !== undefined) desc.setCollisionGroups(groups);
   const col = physics.world.createCollider(desc);
+  if (isLoop) physics.registerLoop(col);
   physics.setOwner(col, { kind: 'ground', material: 'ground' });
 }
 
-/** Wedge along x: height goes from h0 at x0 to h1 at x1 (with optional curve), full width w centred on z. */
-export function wedge(batch: StaticBatch, physics: Physics, x0: number, x1: number, h0: number, h1: number, z: number, w: number, color: [number, number, number], curve = 1, steps = 8) {
+/**
+ * A ramp from `a` to `b` (ground x,z), rising from h0 to h1 (with an optional curve,
+ * >1 = kicker that gets steeper at the top), `w` wide. Solid underneath.
+ */
+export function ramp(batch: StaticBatch, physics: Physics, a: [number, number], b: [number, number], h0: number, h1: number, w: number, color: [number, number, number], curve = 1, steps = 10) {
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const dx = (b[0] - a[0]) / len, dz = (b[1] - a[1]) / len;
+  const px = -dz, pz = dx; // across the ramp
   const pos: number[] = [], idx: number[] = [], col: number[] = [];
-  const hz = w / 2;
-  const prof: [number, number][] = [];
+  const hw = w / 2;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    prof.push([x0 + (x1 - x0) * t, h0 + (h1 - h0) * Math.pow(t, curve)]);
+    const h = h0 + (h1 - h0) * Math.pow(t, curve);
+    const cx = a[0] + dx * len * t, cz = a[1] + dz * len * t;
+    // top-left, top-right, bottom-left, bottom-right (left = -perp)
+    pos.push(cx - px * hw, h, cz - pz * hw, cx + px * hw, h, cz + pz * hw, cx - px * hw, 0, cz - pz * hw, cx + px * hw, 0, cz + pz * hw);
+    // Stripes on the top so ramps read clearly
+    const stripe = i % 2 ? 1 : 0.82;
+    for (let k = 0; k < 4; k++) col.push(color[0] * (k < 2 ? stripe : 0.7), color[1] * (k < 2 ? stripe : 0.7), color[2] * (k < 2 ? stripe : 0.7));
   }
-  // Each profile point: 4 verts (top-left, top-right, bottom-left, bottom-right)
-  for (const [x, h] of prof) pos.push(x, h, z - hz, x, h, z + hz, x, 0, z - hz, x, 0, z + hz);
-  for (let i = 0; i < pos.length / 3; i++) col.push(...color);
   for (let i = 0; i < steps; i++) {
-    const a = i * 4, b = (i + 1) * 4;
-    idx.push(a, a + 1, b + 1, a, b + 1, b); // top
-    idx.push(a, b, b + 2, a, b + 2, a + 2); // side -z
-    idx.push(a + 1, a + 3, b + 3, a + 1, b + 3, b + 1); // side +z
+    const p = i * 4, q = (i + 1) * 4;
+    idx.push(p, p + 1, q + 1, p, q + 1, q); // top
+    idx.push(p, q, q + 2, p, q + 2, p + 2); // left side
+    idx.push(p + 1, p + 3, q + 3, p + 1, q + 3, q + 1); // right side
   }
   const e = steps * 4;
-  idx.push(0, 2, 3, 0, 3, 1); // start face
-  idx.push(e, e + 1, e + 3, e, e + 3, e + 2); // end face
+  idx.push(0, 2, 3, 0, 3, 1);
+  idx.push(e, e + 1, e + 3, e, e + 3, e + 2);
   solid(batch, physics, 'plain', pos, idx, col);
+}
+
+/** Ramp along +x (kept for the track jump). */
+export function wedge(batch: StaticBatch, physics: Physics, x0: number, x1: number, h0: number, h1: number, z: number, w: number, color: [number, number, number], curve = 1, steps = 8) {
+  ramp(batch, physics, [x0, z], [x1, z], h0, h1, w, color, curve, steps);
 }
 
 /**
@@ -90,7 +103,7 @@ export function loopGeometry() {
 
 function loop(batch: StaticBatch, physics: Physics) {
   const { pos, idx, col } = loopGeometry();
-  solid(batch, physics, 'loop', pos, idx, col, LOOP_GROUPS);
+  solid(batch, physics, 'loop', pos, idx, col, true);
   // Side rails so it reads as a loop from a distance.
   for (let i = 0; i + 3 < pos.length / 3 - 2; i += 2) {
     for (const side of [0, 1]) {
@@ -112,6 +125,20 @@ export function buildDirtTrack(batch: StaticBatch, physics: Physics, scene: THRE
   wedge(batch, physics, takeoff.x0, takeoff.x1, 0, takeoff.h, z, width, dirt, 1.3);
   wedge(batch, physics, landing.x0, landing.x1, landing.h, 0, z, width, dirt, 0.8);
   loop(batch, physics);
+
+  // Infield stunt area: tabletop jump, kicker pairs, crate walls and dominoes.
+  const ic: [number, number, number] = [0.62, 0.45, 0.3];
+  ramp(batch, physics, [-705, -420], [-688, -420], 0, 3.5, 12, ic, 1.2);
+  ramp(batch, physics, [-688, -420], [-664, -420], 3.5, 3.5, 12, ic, 1, 2); // the table
+  ramp(batch, physics, [-664, -420], [-644, -420], 3.5, 0, 12, ic, 0.9);
+  for (const z of [-385, -455]) {
+    ramp(batch, physics, [-610, z], [-598, z], 0, 2.4, 8, [0.85, 0.35, 0.25], 1.4, 8);
+    ramp(batch, physics, [-572, z], [-556, z], 2.0, 0, 9, [0.85, 0.35, 0.25], 0.9, 8);
+  }
+  for (const x of [-515, -500])
+    for (let row = 0; row < 3; row++)
+      for (let i = 0; i < 9; i++) props.push({ kind: 'crate', x, y: row * 1.0, z: -420 + (i - 4) * 1.02, rot: 0 });
+  for (let i = 0; i < 18; i++) props.push({ kind: 'domino', x: -640 + i * 2.6, y: 0, z: -490 + 0, rot: 0 });
 
   // Tire walls around the inside of both turns.
   const { cx, cz, halfStraight: hs, radius: r, width: tw } = TRACK;

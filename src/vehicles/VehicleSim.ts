@@ -1,4 +1,4 @@
-import { CAR_GROUPS, RAPIER, Physics } from '../physics/Physics';
+import { RAPIER, Physics } from '../physics/Physics';
 import { SURFACES, Surface } from '../physics/surfaces';
 import { clamp } from '../util/math';
 import type { VehicleSpec } from './VehicleSpec';
@@ -87,10 +87,18 @@ export class VehicleSim {
         .setFriction(0.45)
         .setRestitution(0.12)
         .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-        .setContactForceEventThreshold(mass * 1.2)
-        .setCollisionGroups(CAR_GROUPS),
+        .setContactForceEventThreshold(mass * 1.2),
       this.body,
     );
+    // Cabin-only box that keeps the car from ever passing through the loop surface.
+    const core = world.createCollider(
+      RAPIER.ColliderDesc.cuboid(half.x * 0.8, half.y * 0.55, Math.max(0.6, half.z - 1.0))
+        .setTranslation(0, spec.chassisY + half.y * 0.3, 0)
+        .setDensity(0)
+        .setFriction(0.3),
+      this.body,
+    );
+    physics.registerCarColliders(this.collider, core);
 
     this.ctrl = world.createVehicleController(this.body);
     this.ctrl.indexUpAxis = 1;

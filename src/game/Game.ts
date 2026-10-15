@@ -19,6 +19,7 @@ import { Hud } from '../ui/Hud';
 import { Garage } from './Garage';
 import { Minimap } from '../ui/Minimap';
 import type { Prop } from '../damage/Breakable';
+import { PROP_DEFS } from '../world/propModels';
 import type { ParkedCar } from '../vehicles/ParkedCar';
 import { SURFACES } from '../physics/surfaces';
 import { MAX_HEALTH } from '../damage/Damage';
@@ -343,7 +344,30 @@ export class Game {
 
   private handleImpact(imp: Impact) {
     const car = this.car!;
-    const r = car.applyImpact(imp, this.particles, this.debris);
+    // Breakaway posts (light poles, hydrants…): hit fast enough and they snap off.
+    // The car keeps most of its speed and only feels a small knock.
+    if (imp.other?.kind === 'prop') {
+      const prop = imp.other.ref as Prop;
+      const def = PROP_DEFS[prop.kind];
+      if (def.breakaway !== undefined && prop.fixed && imp.closing >= def.breakaway) {
+        const v = imp.preVel;
+        const sp = Math.hypot(v.x, v.z) || 1;
+        this.world.props.breakOff(prop, imp.point, { x: v.x / sp, y: 0, z: v.z / sp }, sp, this.particles);
+        car.sim.body.setLinvel({ x: v.x * 0.85, y: v.y, z: v.z * 0.85 }, true);
+        imp = { ...imp, impulse: Math.min(imp.impulse, def.mass * imp.closing * 6) };
+        const r = car.applyImpact(imp, this.particles, this.debris);
+        this.audio.crash(Math.max(8, r.dv * 2), 'metal');
+        this.cameras.addShake(0.3);
+        return;
+      }
+    }
+    // Smashing loose stuff (crates, barrels, dominoes, glass) and junk cars should wreck
+    // *them* much more than the car.
+    const other = imp.other;
+    const soft =
+      (other?.kind === 'prop' && PROP_DEFS[(other.ref as Prop).kind].style !== 'topple') ||
+      (other?.kind === 'parked' && (other.ref as ParkedCar).junk);
+    const r = car.applyImpact(soft ? { ...imp, impulse: imp.impulse * 0.45 } : imp, this.particles, this.debris);
     const o = imp.other;
     if (this.debug) console.log(`[crash] ${o?.kind ?? '?'} J=${imp.impulse.toFixed(0)} dv=${r.dv.toFixed(1)} dmg=${r.damage.toFixed(1)} health=${car.health.toFixed(0)}`);
     let material = o?.material;

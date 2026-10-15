@@ -10,6 +10,10 @@ export interface Impact {
   point: { x: number; y: number; z: number };
   /** World-space unit normal pointing from the car toward the other object. */
   normal: { x: number; y: number; z: number };
+  /** Closing speed into the other object just before the crash (m/s). */
+  closing: number;
+  /** The car's velocity just before the crash. */
+  preVel: { x: number; y: number; z: number };
 }
 
 interface Pending {
@@ -131,6 +135,8 @@ export class ImpactTracker {
         otherHandle: handle,
         other: this.physics.owner(handle),
         impulse: Math.min(p.impulse, mu * closing * 1.25),
+        closing,
+        preVel: { x: p.vx, y: p.vy, z: p.vz },
         point: { x: px, y: py, z: pz },
         normal: { x: nx, y: ny, z: nz },
       });

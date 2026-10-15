@@ -5,7 +5,7 @@ import { crateTexture } from '../util/textures';
 
 export type PropKind =
   | 'cone' | 'barrel' | 'crate' | 'block' | 'pin' | 'tire' | 'barrier'
-  | 'pole' | 'hydrant' | 'mailbox' | 'bench' | 'tree' | 'rail';
+  | 'pole' | 'hydrant' | 'mailbox' | 'bench' | 'tree' | 'rail' | 'domino' | 'pane';
 
 /**
  * - loose:   ordinary physics object, just gets knocked around
@@ -26,6 +26,11 @@ export interface PropDef {
   fixed: boolean;
   material_: MaterialKind;
   chunkColor: number;
+  /**
+   * Breakaway posts: hit faster than this (m/s) and the prop snaps off and flies,
+   * while the car barely slows and takes only light damage. Slower = it holds.
+   */
+  breakaway?: number;
 }
 
 const halfHeight = (d: PropDef) => (d.shape.type === 'box' ? d.shape.hy : d.shape.hh);
@@ -125,11 +130,11 @@ export const PROP_DEFS: Record<PropKind, PropDef> = {
   },
   pole: {
     geo: poleGeo,
-    shape: { type: 'cyl', hh: 3.5, r: 0.14 }, mass: 150, toughness: 9000, style: 'topple', fixed: true, material_: 'metal', chunkColor: 0x55595e,
+    shape: { type: 'cyl', hh: 3.5, r: 0.14 }, mass: 150, toughness: 9000, style: 'topple', breakaway: 12, fixed: true, material_: 'metal', chunkColor: 0x55595e,
   },
   hydrant: {
     geo: hydrantGeo,
-    shape: { type: 'cyl', hh: 0.4, r: 0.2 }, mass: 80, toughness: 6000, style: 'topple', fixed: true, material_: 'metal', chunkColor: 0xd8b31a,
+    shape: { type: 'cyl', hh: 0.4, r: 0.2 }, mass: 80, toughness: 6000, style: 'topple', breakaway: 5, fixed: true, material_: 'metal', chunkColor: 0xd8b31a,
   },
   mailbox: {
     geo: () => merge([
@@ -137,7 +142,7 @@ export const PROP_DEFS: Record<PropKind, PropDef> = {
       cyl({ at: [0, 0.52, 0], radius: 0.25, length: 0.45, axis: 'z', segments: 10, color: 0x1f4fa8 }),
       box({ at: [0, -0.4, 0], size: [0.4, 0.35, 0.35], color: 0x1f4fa8 }),
     ]),
-    shape: { type: 'box', hx: 0.27, hy: 0.6, hz: 0.25 }, mass: 60, toughness: 2500, style: 'topple', fixed: true, material_: 'metal', chunkColor: 0x1f4fa8,
+    shape: { type: 'box', hx: 0.27, hy: 0.6, hz: 0.25 }, mass: 60, toughness: 2500, style: 'topple', breakaway: 3, fixed: true, material_: 'metal', chunkColor: 0x1f4fa8,
   },
   bench: {
     geo: () => merge([
@@ -146,7 +151,7 @@ export const PROP_DEFS: Record<PropKind, PropDef> = {
       box({ at: [0.8, -0.3, 0], size: [0.08, 0.45, 0.5], color: 0x2f2f2f }),
       box({ at: [-0.8, -0.3, 0], size: [0.08, 0.45, 0.5], color: 0x2f2f2f }),
     ]),
-    shape: { type: 'box', hx: 0.9, hy: 0.5, hz: 0.28 }, mass: 70, toughness: 3000, style: 'topple', fixed: true, material_: 'wood', chunkColor: 0x7a5230,
+    shape: { type: 'box', hx: 0.9, hy: 0.5, hz: 0.28 }, mass: 70, toughness: 3000, style: 'topple', breakaway: 2, fixed: true, material_: 'wood', chunkColor: 0x7a5230,
   },
   rail: {
     // Low bridge railing segment: bolted down, but breaks loose in a hard hit.
@@ -155,7 +160,29 @@ export const PROP_DEFS: Record<PropKind, PropDef> = {
       box({ at: [0, -0.12, 1.6], size: [0.14, 0.36, 0.14], color: 0x9a9a9a }),
       box({ at: [0, -0.12, -1.6], size: [0.14, 0.36, 0.14], color: 0x9a9a9a }),
     ]),
-    shape: { type: 'box', hx: 0.12, hy: 0.25, hz: 1.95 }, mass: 60, toughness: 3500, style: 'topple', fixed: true, material_: 'metal', chunkColor: 0xe8e8e8,
+    shape: { type: 'box', hx: 0.12, hy: 0.25, hz: 1.95 }, mass: 60, toughness: 3500, style: 'topple', breakaway: 9, fixed: true, material_: 'metal', chunkColor: 0xe8e8e8,
+  },
+  // Giant dominoes: knock one and the whole line goes.
+  domino: {
+    geo: () => merge([
+      box({ at: [0, 0, 0], size: [0.45, 3.2, 1.6], color: 0xf5f3ee }),
+      box({ at: [0.23, 0, 0], size: [0.02, 0.06, 1.5], color: 0x222222 }),
+      box({ at: [-0.23, 0, 0], size: [0.02, 0.06, 1.5], color: 0x222222 }),
+      ...[-0.7, 0.7].flatMap((y) => [-0.45, 0.45].map((z) => cyl({ at: [0.235, y, z], radius: 0.12, length: 0.02, axis: 'x', segments: 10, color: 0x222222 }))),
+      ...[-0.7, 0.7].flatMap((y) => [-0.45, 0.45].map((z) => cyl({ at: [-0.235, y, z], radius: 0.12, length: 0.02, axis: 'x', segments: 10, color: 0x222222 }))),
+    ]),
+    shape: { type: 'box', hx: 0.225, hy: 1.6, hz: 0.8 }, mass: 90, toughness: 2500, style: 'loose', fixed: false, material_: 'wood', chunkColor: 0xf5f3ee,
+  },
+  // Free-standing glass panes in frames: they shatter spectacularly.
+  pane: {
+    geo: () => merge([
+      box({ at: [0, 0, 0], size: [0.06, 2.4, 2.4], color: 0xbfe3f5 }),
+      box({ at: [0, 1.22, 0], size: [0.12, 0.08, 2.5], color: 0x3a3d42 }),
+      box({ at: [0, -1.22, 0], size: [0.12, 0.08, 2.5], color: 0x3a3d42 }),
+      box({ at: [0, 0, 1.22], size: [0.12, 2.5, 0.08], color: 0x3a3d42 }),
+      box({ at: [0, 0, -1.22], size: [0.12, 2.5, 0.08], color: 0x3a3d42 }),
+    ]),
+    shape: { type: 'box', hx: 0.08, hy: 1.25, hz: 1.25 }, mass: 40, toughness: 250, style: 'shatter', fixed: false, material_: 'glass', chunkColor: 0xbfe3f5,
   },
   tree: {
     geo: treeGeo,

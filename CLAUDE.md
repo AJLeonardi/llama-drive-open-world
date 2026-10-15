@@ -24,7 +24,7 @@ node scripts/make-icons.mjs         # regenerate public/icon-*.png
 
 Debug mode is **on by default** for now (device testing); `?debug=0` turns it off. It shows an
 FPS/draw-call/triangle overlay, logs `[crash]` impacts and `[perf]` world build time, and exposes
-`window.__game` for poking at the running game from the console.
+`window.__game` for poking at the running game from the console. The title screen shows the build number (git commit count, injected in `vite.config.ts`; CI fetches full history for it).
 
 ## Architecture
 
@@ -42,7 +42,9 @@ FPS/draw-call/triangle overlay, logs `[crash]` impacts and `[perf]` world build 
 - Rapier is pinned to **0.19.x**, which is much faster than 0.14 with many colliders. The heightfield is column-major, rows along z, `(nrows+1)*(ncols+1)` heights. `setIndexForwardAxis` is a *setter* (`ctrl.setIndexForwardAxis = 2`).
 - Vertex colours must be linear: use `hex()` from `geo.ts`, never raw `/255` values.
 - `mergeGeometries` needs consistent attributes. `geo.merge()` indexes non-indexed inputs, and `StaticBatch` normalizes everything to non-indexed position/normal/uv/color.
-- The loop-the-loop (`dirtTrack.ts:loopGeometry`) uses clothoid transitions. The car body doesn't collide with it (`LOOP_GROUPS`/`CAR_GROUPS` in `Physics.ts`); only the wheel raycasts ride it, helped by stick force, stiffer springs, a speed assist and a steering assist in `VehicleSim`. `tests/loop.test.ts` checks that all three cars complete it, so re-run it after touching vehicle tuning.
+- The loop-the-loop (`dirtTrack.ts:loopGeometry`) uses clothoid transitions. A Rapier contact-filter hook in `Physics.ts` lets the car's main body box ignore the loop (no nose scraping; the wheels ride it, helped by stick force, stiffer springs, a speed assist and a steering assist in `VehicleSim`), while a smaller cabin "core" box collides only with the loop, so cars can't fall through. `tests/loop.test.ts` covers completing it, rolling back when too slow, and wrong-lane entries; re-run it after any vehicle tuning.
+- Breakaway props (`breakaway` speed in `propModels.ts`: poles, hydrants, benches…) snap off when hit faster than that speed; `Game.handleImpact` restores most of the car's speed and caps its damage. Loose props and junk cars only pass 45% of the impulse to car damage.
+- Car damage visuals live in `Vehicle.applyImpact`: dents and paint scuffs are computed in each part's own space (`patch()` hoods hang on a pivot and pop open), lights go dark, and the engine bay (`engineBay()`) shows when the hood opens. Buildings use `fx/BuildingDamage.ts` (growing crack/hole decals, chunks, smoke).
 - Avoid CSS `backdrop-filter` on HUD elements over the canvas, and avoid per-frame DOM writes (the HUD only writes on change). Both cost real frame time on iPad.
 - Measure real performance on the iPad, not in desktop Chrome automation, which caps around 30–40 fps regardless of load.
 

@@ -198,6 +198,23 @@ export class Breakable {
     return this.props.reduce((n, p) => n + (p.body ? 1 : 0), 0);
   }
 
+  /** Snap a bolted-down prop off its base and send it flying along `dir` at roughly `speed`. */
+  breakOff(prop: Prop, point: THREE.Vector3Like, dir: THREE.Vector3Like, speed: number, particles: Particles) {
+    if (!prop.fixed || !prop.body || prop.removed) return;
+    const def = PROP_DEFS[prop.kind];
+    prop.fixed = false;
+    prop.hp = 0;
+    prop.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    const k = def.mass * speed * 0.9;
+    prop.body.applyImpulseAtPoint({ x: dir.x * k, y: k * 0.25, z: dir.z * k }, point, true);
+    this.moving.add(prop);
+    if (prop.kind === 'hydrant' && prop.fountain <= 0) {
+      prop.fountain = 8;
+      this.fountains.push(prop);
+    }
+    particles.sparksAt(point, 16);
+  }
+
   /** The car hit a prop. */
   hit(prop: Prop, impulse: number, carMass: number, point: THREE.Vector3Like, normal: THREE.Vector3Like, particles: Particles, debris: Debris): HitResult {
     const def = PROP_DEFS[prop.kind];
@@ -240,9 +257,10 @@ export class Breakable {
     mesh.instanceMatrix.needsUpdate = true;
 
     // Planks flying apart.
+    const glass = def.material_ === 'glass';
     let g = this.chunkGeo.get(prop.kind);
     if (!g) {
-      g = new THREE.BoxGeometry(0.95, 0.12, 0.3);
+      g = glass ? new THREE.BoxGeometry(0.04, 0.5, 0.45) : new THREE.BoxGeometry(0.95, 0.12, 0.3);
       const c = new THREE.Color(def.chunkColor);
       const arr = new Float32Array(g.attributes.position.count * 3);
       for (let i = 0; i < arr.length; i += 3) arr.set([c.r, c.g, c.b], i);
@@ -262,7 +280,8 @@ export class Breakable {
       this.group.add(plank);
       debris.release(plank, vel, 5, false, 'wood', 300);
     }
-    particles.splinters(center, 20, def.chunkColor);
+    if (glass) particles.glass(center, 90, vel);
+    else particles.splinters(center, 20, def.chunkColor);
   }
 
   update(dt: number, particles: Particles, camera: THREE.Vector3, player: THREE.Vector3Like) {

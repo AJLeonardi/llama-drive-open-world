@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Finish, ModelBuilder } from '../CarModel';
-import { blob, box, cyl, latheX, merge, rbox, torus } from './geo';
+import { blob, box, cyl, latheX, merge, rbox, torus, tube } from './geo';
 
 export interface WheelDesign {
   radius: number;
@@ -128,4 +128,55 @@ export function interior(m: ModelBuilder, o: InteriorOpts) {
   pivot.add(wheel);
   m.root.add(pivot);
   m.steeringWheel = wheel;
+}
+
+export interface EngineOpts {
+  /** Centre of the engine block (car local). */
+  at: [number, number, number];
+  /** Bay width (m) — sizes the block and radiator. */
+  width: number;
+  cylinders: 6 | 12;
+  /** Radiator sits in front of the engine (front-engined cars). */
+  radiatorZ?: number;
+  accent: number;
+}
+
+/**
+ * The engine you see when the hood is popped open or torn off: block, cylinder
+ * banks, intake, air box, radiator, battery, coolant tank and hoses. It dents and
+ * scuffs like any other part.
+ */
+export function engineBay(m: ModelBuilder, o: EngineOpts) {
+  const [x, y, z] = o.at;
+  const w = o.width;
+  const len = o.cylinders === 12 ? 0.95 : 0.7;
+  const g: THREE.BufferGeometry[] = [
+    rbox({ at: [x, y, z], size: [w * 0.45, 0.32, len], radius: 0.04, color: 0x4b4e53 }), // block
+    rbox({ at: [x, y + 0.22, z], size: [w * 0.22, 0.14, len * 0.9], radius: 0.03, color: 0x6d7076 }), // intake plenum
+  ];
+  // Cylinder banks with valve covers
+  for (const side of [-1, 1]) {
+    g.push(rbox({ at: [x + side * w * 0.2, y + 0.16, z], size: [w * 0.14, 0.12, len * 0.95], rot: [0, 0, side * -0.45], radius: 0.03, color: 0x2a2c30 }));
+    g.push(rbox({ at: [x + side * w * 0.21, y + 0.21, z], size: [w * 0.1, 0.03, len * 0.8], rot: [0, 0, side * -0.45], radius: 0.01, color: o.accent }));
+  }
+  // Intake runners
+  const runners = o.cylinders === 12 ? 6 : 3;
+  for (let i = 0; i < runners; i++) {
+    const rz = z - len * 0.4 + (i / (runners - 1)) * len * 0.8;
+    for (const side of [-1, 1]) g.push(tube([[x, y + 0.27, rz], [x + side * w * 0.1, y + 0.3, rz], [x + side * w * 0.17, y + 0.2, rz]], 0.025, 0x8a8d92, 6, 5));
+  }
+  // Air box, oil cap, battery (with red/black terminals), coolant tank, hoses
+  g.push(rbox({ at: [x + w * 0.32, y + 0.2, z + len * 0.25], size: [w * 0.22, 0.16, 0.3], radius: 0.04, color: 0x1d1e20 }));
+  g.push(cyl({ at: [x - w * 0.18, y + 0.27, z + len * 0.3], radius: 0.03, length: 0.03, axis: 'y', segments: 8, color: 0xe0c020 }));
+  g.push(rbox({ at: [x - w * 0.34, y + 0.12, z - len * 0.25], size: [0.18, 0.18, 0.26], radius: 0.02, color: 0x18191b }));
+  g.push(cyl({ at: [x - w * 0.37, y + 0.23, z - len * 0.33], radius: 0.022, length: 0.04, axis: 'y', segments: 6, color: 0xd62020 }));
+  g.push(cyl({ at: [x - w * 0.31, y + 0.23, z - len * 0.33], radius: 0.022, length: 0.04, axis: 'y', segments: 6, color: 0x111111 }));
+  g.push(rbox({ at: [x + w * 0.34, y + 0.14, z - len * 0.3], size: [0.12, 0.16, 0.16], radius: 0.03, color: 0xe6e3d8 }));
+  g.push(tube([[x + w * 0.1, y + 0.05, z + len * 0.5], [x + w * 0.05, y + 0.02, z + len * 0.7], [x, y, z + len * 0.85]], 0.03, 0x111214, 8, 5));
+  g.push(tube([[x - w * 0.1, y + 0.2, z + len * 0.45], [x - w * 0.08, y + 0.15, z + len * 0.7], [x, y + 0.1, z + len * 0.85]], 0.03, 0x111214, 8, 5));
+  if (o.radiatorZ !== undefined) {
+    g.push(rbox({ at: [x, y + 0.05, o.radiatorZ], size: [w * 0.85, 0.42, 0.06], radius: 0.01, color: 0x1a1b1d }));
+    for (let i = 0; i < 6; i++) g.push(box({ at: [x, y - 0.12 + i * 0.07, o.radiatorZ + 0.035], size: [w * 0.8, 0.012, 0.01], color: 0x44474c }));
+  }
+  m.part('engine', 'trim', merge(g), { finish: 'engine', sound: 'metal' });
 }

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ModelBuilder, CarModel } from '../CarModel';
 import { SPECS } from '../VehicleSpec';
 import { arcPoints, blob, cyl, keyframes, merge, patch, rbox, sculpt, torus, tube } from './geo';
-import { interior, wheelPieces } from './common';
+import { engineBay, interior, wheelPieces } from './common';
 
 const WHITE = 0xf3f3f1;
 const BLACK = 0x1d1e20;
@@ -34,11 +34,13 @@ export function buildBronco(): CarModel {
     // Black lower cladding; dark openings under the doors and hood (seen if they fall off).
     color: (x, y, z) => (doorFront(x, y, z) || doorRear(x, y, z) || hood(x, y, z) ? 0x26272a : y < 0.66 ? BLACK : WHITE),
   });
-  m.part('body', 'body', shell);
+  // The shell's lid under the hood is cut away so the engine shows when the hood opens.
+  m.part('body', 'body', patch(shell, (x, y, z) => !(hood(x, y, z) && Math.abs(x) < 0.86), 0, (x, y, z) => (doorFront(x, y, z) || doorRear(x, y, z) ? 0x26272a : y < 0.66 ? BLACK : WHITE)));
   m.part('hood', 'panel', merge([
     patch(shell, hood, 0.012, WHITE),
     rbox({ at: [0, 1.29, 1.55], size: [0.7, 0.04, 0.9], radius: 0.02, color: WHITE }), // power dome
-  ]), { detachable: true });
+  ]), { detachable: true, hinge: [0, 1.25, 0.98] });
+  engineBay(m, { at: [0, 0.86, 1.62], width: 1.7, cylinders: 6, radiatorZ: 2.22, accent: 0x9aa0a6 });
   const mirror = (x: number) => merge([
     blob([x * 1.13, 1.36, 0.82], [0.05, 0.1, 0.13], BLACK),
     rbox({ at: [x * 1.04, 1.33, 0.8], size: [0.14, 0.04, 0.06], radius: 0.015, color: BLACK }),
@@ -89,19 +91,14 @@ export function buildBronco(): CarModel {
     rbox({ at: [0, 0.98, 2.39], size: [1.62, 0.36, 0.06], radius: 0.03, color: BLACK }),
     ...[0.9, 1.0, 1.08].map((y) => rbox({ at: [0, y, 2.425], size: [0.82, 0.03, 0.02], radius: 0.01, color: 0x2e3034 })),
   ]), { finish: 'satin' });
-  const lights: THREE.BufferGeometry[] = [];
   const bezels: THREE.BufferGeometry[] = [];
   for (const x of [0.64, -0.64]) {
-    lights.push(cyl({ at: [x, 0.98, 2.405], radius: 0.115, length: 0.04, axis: 'z', segments: 24, color: 0xffffff }));
+    m.detail(cyl({ at: [x, 0.98, 2.405], radius: 0.115, length: 0.04, axis: 'z', segments: 24, color: 0xffffff }), 'headlight');
     bezels.push(torus([x, 0.98, 2.43], 0.125, 0.018, [0, 0, 0], 0x9aa0a6));
     bezels.push(torus([x, 0.98, 2.44], 0.07, 0.008, [0, 0, 0], 0x6a6e73));
   }
-  m.detail(merge(lights), 'headlight');
   m.detail(merge(bezels), 'chrome');
-  m.detail(merge([
-    rbox({ at: [0.88, 1.0, -2.37], size: [0.11, 0.34, 0.04], radius: 0.02, color: 0xffffff }),
-    rbox({ at: [-0.88, 1.0, -2.37], size: [0.11, 0.34, 0.04], radius: 0.02, color: 0xffffff }),
-  ]), 'taillight');
+  for (const x of [0.88, -0.88]) m.detail(rbox({ at: [x, 1.0, -2.37], size: [0.11, 0.34, 0.04], radius: 0.02, color: 0xffffff }), 'taillight');
 
   // Steel bumpers (front has red tow hooks and fog lights), rock rails, spare tire.
   m.part('front-bumper', 'panel', merge([

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { ModelBuilder, CarModel } from '../CarModel';
 import { SPECS } from '../VehicleSpec';
 import { blob, cyl, keyframes, merge, patch, rbox, sculpt } from './geo';
-import { interior, wheelPieces } from './common';
+import { engineBay, interior, wheelPieces } from './common';
 
 const GREEN = 0x6fd418;
 const CARBON = 0x18191b;
@@ -34,8 +34,15 @@ export function buildLambo(): CarModel {
     ]),
     color: (x, y, z) => (door(x, y, z) || frunk(x, y, z) ? 0x202022 : y < 0.24 || intake(x, y, z) ? CARBON : GREEN),
   });
-  m.part('body', 'body', shell);
-  m.part('hood', 'panel', patch(shell, frunk, 0.01, GREEN), { detachable: true });
+  m.part('body', 'body', patch(shell, (x, y, z) => !frunk(x, y, z), 0, (x, y, z) => (door(x, y, z) ? 0x202022 : y < 0.24 || intake(x, y, z) ? CARBON : GREEN)));
+  m.part('hood', 'panel', patch(shell, frunk, 0.01, GREEN), { detachable: true, hinge: [0, 0.78, 1.05] });
+  // Front: radiators and a small luggage tub. Back: the V12, visible under the glass.
+  m.part('frunk', 'trim', merge([
+    rbox({ at: [0, 0.4, 1.65], size: [1.0, 0.25, 0.8], radius: 0.05, color: 0x1a1a1c }),
+    rbox({ at: [0.62, 0.38, 2.05], size: [0.3, 0.3, 0.05], rot: [0, 0.4, 0], radius: 0.01, color: 0x2b2c2f }),
+    rbox({ at: [-0.62, 0.38, 2.05], size: [0.3, 0.3, 0.05], rot: [0, -0.4, 0], radius: 0.01, color: 0x2b2c2f }),
+  ]), { finish: 'engine' });
+  engineBay(m, { at: [0, 0.5, -1.3], width: 1.25, cylinders: 12, accent: 0xd8261c });
   for (const side of [1, -1]) {
     m.part(side > 0 ? 'door-l' : 'door-r', 'panel', merge([
       patch(shell, (x, y, z) => x * side > 0 && door(x, y, z), 0.01, GREEN),
@@ -64,19 +71,19 @@ export function buildLambo(): CarModel {
   ), { finish: 'satin' });
 
   // Lights: Y-shaped running lights, dark headlight housings, slim taillights.
-  const head: THREE.BufferGeometry[] = [];
   const housings: THREE.BufferGeometry[] = [];
-  const tail: THREE.BufferGeometry[] = [];
   for (const side of [1, -1]) {
     housings.push(rbox({ at: [side * 0.6, 0.47, 2.17], size: [0.42, 0.08, 0.16], rot: [0, side * 0.35, side * -0.12], radius: 0.02, color: 0x0e0f10 }));
-    head.push(rbox({ at: [side * 0.6, 0.5, 2.24], size: [0.36, 0.02, 0.02], rot: [0, side * 0.35, side * -0.12], radius: 0.008, color: 0xffffff }));
-    head.push(rbox({ at: [side * 0.72, 0.45, 2.2], size: [0.14, 0.02, 0.02], rot: [0, side * 0.35, side * 0.6], radius: 0.008, color: 0xffffff }));
-    tail.push(rbox({ at: [side * 0.62, 0.66, -2.37], size: [0.5, 0.035, 0.03], radius: 0.01, color: 0xffffff }));
-    tail.push(rbox({ at: [side * 0.42, 0.6, -2.36], size: [0.16, 0.03, 0.03], rot: [0, 0, side * 0.7], radius: 0.01, color: 0xffffff }));
+    m.detail(merge([
+      rbox({ at: [side * 0.6, 0.5, 2.24], size: [0.36, 0.02, 0.02], rot: [0, side * 0.35, side * -0.12], radius: 0.008, color: 0xffffff }),
+      rbox({ at: [side * 0.72, 0.45, 2.2], size: [0.14, 0.02, 0.02], rot: [0, side * 0.35, side * 0.6], radius: 0.008, color: 0xffffff }),
+    ]), 'headlight');
+    m.detail(merge([
+      rbox({ at: [side * 0.62, 0.66, -2.37], size: [0.5, 0.035, 0.03], radius: 0.01, color: 0xffffff }),
+      rbox({ at: [side * 0.42, 0.6, -2.36], size: [0.16, 0.03, 0.03], rot: [0, 0, side * 0.7], radius: 0.01, color: 0xffffff }),
+    ]), 'taillight');
   }
   m.detail(merge(housings), 'satin');
-  m.detail(merge(head), 'headlight');
-  m.detail(merge(tail), 'taillight');
 
   m.part('front-bumper', 'panel', merge([
     rbox({ at: [0, 0.18, 2.3], size: [1.4, 0.04, 0.16], radius: 0.015, color: CARBON }), // splitter

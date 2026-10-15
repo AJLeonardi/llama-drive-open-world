@@ -117,13 +117,13 @@ export const SPECS: Record<CarId, VehicleSpec> = {
   },
   wrangler: {
     id: 'wrangler',
-    name: 'Jeep Wrangler',
+    name: 'Jeep Wrangler 2-Door',
     blurb: 'Open top, goes anywhere',
-    mass: 2000,
-    half: { x: 0.92, y: 0.66, z: 2.42 },
+    mass: 1900,
+    half: { x: 0.92, y: 0.66, z: 2.17 }, // 2-door
     chassisY: 1.16,
     comY: 0.68,
-    wheelbase: 3.0,
+    wheelbase: 2.46,
     track: 1.62,
     wheelRadius: 0.42, // 33" Rubicon tires
     wheelWidth: 0.3,
@@ -136,7 +136,7 @@ export const SPECS: Record<CarId, VehicleSpec> = {
     grip: 1.05,
     downforce: 1.0,
     durability: 1.15,
-    eye: { x: 0.38, y: 1.5, z: 0.1 },
+    eye: { x: 0.38, y: 1.5, z: -0.15 },
     engine: {
       cylinders: 6, idleRpm: 700, redlineRpm: 6400, gears: 8, shiftTime: 0.14,
       turbo: false, popChance: 0.12, tone: 1050, roughness: 0.2, wind: 1.0, volume: 1.0, pitch: 1, body: 0.55,

@@ -4,7 +4,7 @@ import { crackTexture } from '../util/textures';
 export type PartKind = 'body' | 'panel' | 'glass' | 'trim' | 'interior';
 
 /** Render material for a part. Colours come from vertex colours; these set the finish. */
-export type Finish = 'paint' | 'plastic' | 'satin' | 'chrome' | 'glass' | 'headlight' | 'taillight' | 'rubber' | 'interior';
+export type Finish = 'paint' | 'plastic' | 'satin' | 'chrome' | 'glass' | 'headlight' | 'taillight' | 'rubber' | 'interior' | 'brokenLight' | 'engine';
 
 export interface CarPart {
   name: string;
@@ -22,6 +22,11 @@ export interface CarPart {
   radius: number;
   /** What it sounds like when it falls off / gets hit. */
   sound: 'metal' | 'glass' | 'plastic';
+  /** Hinged parts (the hood) swing open on this pivot when crumpled. */
+  pivot?: THREE.Group;
+  popped: boolean;
+  /** Head/tail lights go dark when smashed. */
+  light: boolean;
 }
 
 export interface CarModel {
@@ -51,6 +56,8 @@ export function carMaterials() {
       chrome: std({ metalness: 1.0, roughness: 0.16, envMapIntensity: 1.4 }),
       rubber: std({ metalness: 0.0, roughness: 0.92 }),
       interior: std({ metalness: 0.0, roughness: 0.8 }),
+      engine: std({ metalness: 0.6, roughness: 0.45 }),
+      brokenLight: new THREE.MeshStandardMaterial({ color: 0x222426, roughness: 0.35, metalness: 0.3 }),
       headlight: new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4dc, emissiveIntensity: 1.1, roughness: 0.1, metalness: 0.2 }),
       taillight: new THREE.MeshStandardMaterial({ color: 0x700000, emissive: 0xff1616, emissiveIntensity: 0.9, roughness: 0.2 }),
       glass: new THREE.MeshStandardMaterial({
@@ -79,14 +86,24 @@ export class ModelBuilder {
     name: string,
     kind: PartKind,
     geo: THREE.BufferGeometry,
-    opts: { detachable?: boolean; finish?: Finish; sound?: CarPart['sound'] } = {},
+    opts: { detachable?: boolean; finish?: Finish; sound?: CarPart['sound']; hinge?: [number, number, number] } = {},
   ) {
     const finish = opts.finish ?? DEFAULT_FINISH[kind];
     const mesh = new THREE.Mesh(geo, carMaterials()[finish]);
     mesh.name = name;
     mesh.castShadow = kind !== 'glass';
     if (kind === 'glass') mesh.renderOrder = 2;
-    this.root.add(mesh);
+    let pivot: THREE.Group | undefined;
+    if (opts.hinge) {
+      // Geometry stays in car space; the pivot sits on the hinge line so the part can swing.
+      pivot = new THREE.Group();
+      pivot.position.set(...opts.hinge);
+      mesh.position.set(-opts.hinge[0], -opts.hinge[1], -opts.hinge[2]);
+      pivot.add(mesh);
+      this.root.add(pivot);
+    } else {
+      this.root.add(mesh);
+    }
     geo.computeBoundingSphere();
     const bs = geo.boundingSphere!;
     const p: CarPart = {
@@ -97,6 +114,9 @@ export class ModelBuilder {
       center: bs.center.clone(),
       radius: bs.radius,
       sound: opts.sound ?? (kind === 'glass' ? 'glass' : finish === 'plastic' || finish === 'satin' ? 'plastic' : 'metal'),
+      pivot,
+      popped: false,
+      light: finish === 'headlight' || finish === 'taillight',
     };
     this.parts.push(p);
     return p;

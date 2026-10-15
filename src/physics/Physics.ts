@@ -20,20 +20,28 @@ export interface ColliderOwner {
 
 export const FIXED_DT = 1 / 60;
 
-/**
- * Collision groups (Rapier packs membership in the high 16 bits, filter in the low 16).
- * The car body ignores the loop-the-loop surface: only its wheel raycasts ride it,
- * so low noses (the Lambo) can't scrape on the way in.
- */
-const GROUP_CAR = 0x0002;
-const GROUP_LOOP = 0x0004;
-export const CAR_GROUPS = (GROUP_CAR << 16) | 0xffff;
-export const LOOP_GROUPS = (GROUP_LOOP << 16) | (0xffff & ~GROUP_CAR);
-
 export class Physics {
   readonly world: RAPIER.World;
   readonly events: RAPIER.EventQueue;
   private owners = new Map<number, ColliderOwner>();
+  /**
+   * Loop-the-loop rules: the car's main body box ignores the loop surface (so low noses
+   * don't scrape on the way in; the wheels ride it), while a smaller cabin "core" box
+   * collides ONLY with the loop, so a car can never fall through it.
+   */
+  private loops = new Set<number>();
+  private chassis = new Set<number>();
+  private cores = new Set<number>();
+  private readonly hooks: RAPIER.PhysicsHooks = {
+    filterContactPair: (c1, c2) => {
+      const core = this.cores.has(c1) || this.cores.has(c2);
+      const loop = this.loops.has(c1) || this.loops.has(c2);
+      if (core) return loop ? RAPIER.SolverFlags.COMPUTE_IMPULSE : null;
+      if (loop && (this.chassis.has(c1) || this.chassis.has(c2))) return null;
+      return RAPIER.SolverFlags.COMPUTE_IMPULSE;
+    },
+    filterIntersectionPair: () => true,
+  };
 
   constructor() {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -53,13 +61,30 @@ export class Physics {
     this.owners.delete(collider.handle);
   }
 
+  registerLoop(c: RAPIER.Collider) {
+    c.setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS);
+    this.loops.add(c.handle);
+  }
+
+  registerCarColliders(chassis: RAPIER.Collider, core: RAPIER.Collider) {
+    chassis.setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS);
+    core.setActiveHooks(RAPIER.ActiveHooks.FILTER_CONTACT_PAIRS);
+    this.chassis.add(chassis.handle);
+    this.cores.add(core.handle);
+  }
+
   removeBody(body: RAPIER.RigidBody) {
-    for (let i = 0; i < body.numColliders(); i++) this.owners.delete(body.collider(i).handle);
+    for (let i = 0; i < body.numColliders(); i++) {
+      const h = body.collider(i).handle;
+      this.owners.delete(h);
+      this.chassis.delete(h);
+      this.cores.delete(h);
+    }
     this.world.removeRigidBody(body);
   }
 
   step() {
-    this.world.step(this.events);
+    this.world.step(this.events, this.hooks);
   }
 
   dispose() {

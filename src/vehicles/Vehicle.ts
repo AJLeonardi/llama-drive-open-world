@@ -5,7 +5,7 @@ import {
   MAX_CRUSH, MAX_HEALTH, PART_LIMITS, applyDamage, carDamage, damageStage, dentDepth, dentRadius,
   handicapFor, impactDeltaV, misfireChancePerSecond,
 } from '../damage/Damage';
-import { dentGeometry } from '../damage/Deformer';
+import { dentGeometry, scuffGeometry } from '../damage/Deformer';
 import type { Debris } from '../fx/Debris';
 import type { Particles } from '../fx/Particles';
 import { COCKPIT_HIDDEN, CarModel, CarPart, carMaterials } from './CarModel';
@@ -21,6 +21,10 @@ const dLocal = new THREE.Vector3();
 const qTmp = new THREE.Quaternion();
 const vTmp = new THREE.Vector3();
 const boxTmp = new THREE.Box3();
+const partInv = new THREE.Matrix4();
+const partPoint = new THREE.Vector3();
+const partDir = new THREE.Vector3();
+const partQuat = new THREE.Quaternion();
 
 export interface CrashResult {
   damage: number;
@@ -117,6 +121,12 @@ export class Vehicle {
       w.children[0].rotation.x = ctrl.wheelRotation(i) ?? 0;
     }
     this.model.steeringWheel.rotation.z = -this.sim.steerAngle * 6;
+    for (const p of this.model.parts) {
+      if (!p.pivot || !p.popped || p.detached) continue;
+      const t = p.pivot.userData.target as number;
+      p.pivot.rotation.x += (t - p.pivot.rotation.x) * 0.25;
+      p.pivot.rotation.z += ((p.pivot.userData.twist as number) - p.pivot.rotation.z) * 0.25;
+    }
   }
 
   /** Apply a crash to the car: health, dents, parts falling off, glass. */
@@ -141,20 +151,40 @@ export class Vehicle {
     const depth = dentDepth(dv);
     const radius = dentRadius(dv);
     const vel = this.sim.body.linvel();
+    const frontHit = pLocal.z > this.spec.wheelbase / 2 - 0.2;
+    const worldPoint = new THREE.Vector3(impact.point.x, impact.point.y, impact.point.z);
+    const worldDir = new THREE.Vector3(-impact.normal.x, -impact.normal.y, -impact.normal.z);
+    this.model.root.updateMatrixWorld(true);
     for (const part of this.model.parts) {
       if (part.detached || part.kind === 'interior') continue;
+      // Work in the part's own space (hinged parts like the hood can be swung open).
+      partInv.copy(part.mesh.matrixWorld).invert();
+      partPoint.copy(worldPoint).applyMatrix4(partInv);
+      part.mesh.getWorldQuaternion(partQuat).invert();
+      partDir.copy(worldDir).applyQuaternion(partQuat).normalize();
       const geo = part.mesh.geometry;
       boxTmp.copy(geo.boundingBox!);
-      const dist = boxTmp.distanceToPoint(pLocal);
+      const dist = boxTmp.distanceToPoint(partPoint);
+      if (dist > radius * 1.25) continue;
+      if (part.kind !== 'glass' && !part.light) {
+        // Paint scraped down to bare metal around the hit (wider than the dent itself).
+        scuffGeometry(geo, part.original, partPoint, radius * 1.15, Math.min(0.9, dv / 20));
+      }
       if (dist > radius) continue;
       const near = 1 - dist / radius;
       part.damage += dv * near;
       if (part.kind !== 'glass') {
         const body = part.kind === 'body';
-        if (dentGeometry(geo, part.original, pLocal, dLocal, depth * (body ? 1 : 1.2), radius, body ? MAX_CRUSH.body : MAX_CRUSH.panel)) {
+        if (dentGeometry(geo, part.original, partPoint, partDir, depth * (body ? 1 : 1.2), radius, body ? MAX_CRUSH.body : MAX_CRUSH.panel)) {
           geo.computeVertexNormals(); // keep the smooth shading following the crumpled shape
           geo.computeBoundingBox();
         }
+      }
+      // A crumpled hood buckles and pops open on its hinge, showing the engine.
+      if (part.pivot && !part.popped && frontHit && part.damage > 5 && !part.detached) {
+        part.popped = true;
+        part.pivot.userData.target = -(0.3 + Math.min(0.6, dv * 0.02) + Math.random() * 0.15);
+        part.pivot.userData.twist = (Math.random() - 0.5) * 0.25;
       }
       this.updatePartState(part, particles, debris, vel, result);
     }
@@ -173,6 +203,15 @@ export class Vehicle {
   }
 
   private updatePartState(part: CarPart, particles: Particles, debris: Debris, vel: THREE.Vector3Like, result: CrashResult) {
+    if (part.light) {
+      if (!part.cracked && part.damage > 3) {
+        part.cracked = true;
+        part.mesh.material = carMaterials().brokenLight;
+        particles.glass(part.center.clone().applyMatrix4(this.model.root.matrixWorld), 12, vel);
+        result.glassBroke = true;
+      }
+      return;
+    }
     if (part.kind === 'glass') {
       if (!part.cracked && part.damage > PART_LIMITS.glassCrack) {
         part.cracked = true;
@@ -189,7 +228,7 @@ export class Vehicle {
       }
       return;
     }
-    if (part.detachable && part.damage > PART_LIMITS.detach) {
+    if (part.detachable && part.damage > PART_LIMITS.detach * (part.pivot ? 2.5 : 1)) {
       part.detached = true;
       result.partsLost.push(part.name);
       this.model.root.updateMatrixWorld(true);
