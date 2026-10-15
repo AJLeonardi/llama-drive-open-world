@@ -133,7 +133,16 @@ export class Game {
       if (k === 'f' && this.car) this.car.sim.flipUpright();
     };
     this.setupOrbitDrag();
+    // On the car-select screen, tapping a car picks it (the cards work too).
+    this.canvas.addEventListener('click', (e) => {
+      if (this.state !== 'select') return;
+      const r = this.canvas.getBoundingClientRect();
+      const id = this.garage.pick(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      if (id) this.startDrive(id);
+    });
     window.addEventListener('resize', () => this.resize());
+    window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 250));
+    window.visualViewport?.addEventListener('resize', () => this.resize());
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.state === 'drive') this.pause(true);
       if (document.hidden) this.audio.suspend(true);
@@ -246,6 +255,7 @@ export class Game {
     requestAnimationFrame((t) => this.frame(t));
     const dt = Math.min(0.1, Math.max(0, (now - (this.last || now)) / 1000));
     this.last = now;
+    this.syncSize();
     (this.sky.material as THREE.ShaderMaterial).uniforms.time.value = now / 1000;
     const focus = this.car && this.state !== 'title' ? this.car.model.root.position : this.camera.position;
     this.sun.target.position.copy(focus);
@@ -478,8 +488,23 @@ export class Game {
     });
   }
 
+  private viewW = 0;
+  private viewH = 0;
+
+  /**
+   * Match the drawing size to the canvas's real on-screen size. iOS often reports the
+   * old size when the 'resize'/'orientationchange' events fire, which left the view
+   * stretched (squashed) after rotating — so this is also checked every frame.
+   */
+  private syncSize() {
+    const w = this.canvas.clientWidth || window.innerWidth, h = this.canvas.clientHeight || window.innerHeight;
+    if (w !== this.viewW || h !== this.viewH) this.resize();
+  }
+
   private resize() {
-    const w = window.innerWidth, h = window.innerHeight;
+    const w = this.canvas.clientWidth || window.innerWidth, h = this.canvas.clientHeight || window.innerHeight;
+    this.viewW = w;
+    this.viewH = h;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();

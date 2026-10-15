@@ -257,8 +257,9 @@ h2 {
 
 .menu-buttons { display: flex; flex-wrap: wrap; justify-content: center; max-width: 900px; }
 
-/* car select */
+/* car select (taps pass through to the 3D cars; the cards themselves are tappable) */
 .select { justify-content: flex-end; }
+.screen.select { pointer-events: none; }
 .select h2 { position: absolute; top: calc(14px + var(--safe-t)); left: 0; right: 0; }
 .cards { display: flex; gap: 2vw; width: 100%; justify-content: center; }
 .card {
@@ -337,3 +338,17 @@ h2 {
 .bigmap.on { display: flex; }
 .bigmap canvas { border-radius: 16px; border: 3px solid rgba(255, 255, 255, 0.85); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5); }
 .bigmap-hint { font-size: max(16px, calc(var(--u) * 3.5)); font-weight: 800; opacity: 0.9; }
+
+/* Short landscape screens (phones): compact cards so nothing gets squashed. */
+@media (max-height: 500px) {
+  .select h2 { font-size: 24px; top: calc(6px + var(--safe-t)); }
+  .cards { gap: 10px; }
+  .card { padding: 6px 8px 8px; border-width: 3px; border-radius: 14px; max-width: 230px; }
+  .card .name { font-size: 15px; line-height: 1.15; }
+  .card .blurb { font-size: 12px; margin-top: 2px; }
+  .card .stats { font-size: 11px; gap: 8px; margin-top: 4px; }
+  .card .go { margin-top: 6px; padding: 5px 16px; font-size: 14px; }
+  h1 { font-size: 40px; margin-bottom: 6px; }
+  .subtitle { font-size: 16px; margin-bottom: 10px; }
+  .big { padding: 12px 26px; font-size: 20px; min-width: 200px; }
+}

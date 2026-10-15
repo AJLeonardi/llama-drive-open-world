@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { buildCar } from '../vehicles/builders';
-import { CAR_IDS } from '../vehicles/VehicleSpec';
+import { CAR_IDS, CarId } from '../vehicles/VehicleSpec';
 
 /** The car-select backdrop: the three cars spinning on turntables above their cards. */
 export class Garage {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 1, 0.1, 200);
   private turntables: THREE.Group[] = [];
+  private raycaster = new THREE.Raycaster();
 
   constructor() {
     this.scene.background = new THREE.Color(0x1f2a40);
@@ -38,6 +39,7 @@ export class Garage {
       car.position.y = 0.15;
       t.add(car);
       t.rotation.y = 0.6 + i;
+      t.userData.id = id;
       this.scene.add(t);
       this.turntables.push(t);
     });
@@ -50,6 +52,16 @@ export class Garage {
     this.camera.position.set(0, dist * 0.42, dist);
     this.camera.lookAt(0, -1.2, 0);
     this.camera.updateProjectionMatrix();
+  }
+
+  /** Which car (if any) is under a tap. x,y are normalised device coords (-1..1). */
+  pick(x: number, y: number): CarId | null {
+    this.raycaster.setFromCamera(new THREE.Vector2(x, y), this.camera);
+    const hit = this.raycaster.intersectObjects(this.turntables, true)[0];
+    if (!hit) return null;
+    let o: THREE.Object3D | null = hit.object;
+    while (o && !o.userData.id) o = o.parent;
+    return (o?.userData.id as CarId) ?? null;
   }
 
   update(dt: number) {

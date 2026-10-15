@@ -117,8 +117,8 @@ export const SPECS: Record<CarId, VehicleSpec> = {
   },
   wrangler: {
     id: 'wrangler',
-    name: 'Jeep Wrangler 2-Door',
-    blurb: 'Open top, goes anywhere',
+    name: 'Jeep Wrangler',
+    blurb: '2-door, open top, goes anywhere',
     mass: 1900,
     half: { x: 0.92, y: 0.66, z: 2.17 }, // 2-door
     chassisY: 1.16,
