@@ -153,6 +153,17 @@ export class Hud {
     this.add('underwater', `<div class="screen underwater"><h2>🌊 SPLASH! 🐠 Say hi to the fish! 🐟</h2></div>`);
   }
 
+  /** Small "new version" button (shown when an update arrives mid-game). */
+  showUpdate(onTap: () => void) {
+    if (this.root.querySelector('.update-btn')) return;
+    const b = html(`<button class="update-btn">✨ New version — tap to update</button>`);
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onTap();
+    });
+    this.root.appendChild(b);
+  }
+
   private add(name: Screen, markup: string) {
     const el = html(markup);
     this.screens.set(name, el);

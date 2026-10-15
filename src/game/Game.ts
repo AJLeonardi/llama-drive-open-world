@@ -171,6 +171,16 @@ export class Game {
     if (this.debug) (window as unknown as { __game: Game }).__game = this;
   }
 
+  /**
+   * A newer build has been deployed. On menus, just reload into it; while driving,
+   * show an "update" button instead of interrupting.
+   */
+  offerUpdate() {
+    const reload = () => location.reload();
+    if (this.state === 'loading' || this.state === 'title' || this.state === 'select') reload();
+    else this.hud.showUpdate(reload);
+  }
+
   // ---------------------------------------------------------------- flow
   private onPlay() {
     this.audio.unlock();

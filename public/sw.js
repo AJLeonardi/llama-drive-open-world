@@ -1,6 +1,9 @@
-// Offline support: network-first for the page (so updates arrive when online),
-// cache-first for everything else (Vite asset names are content-hashed).
-const CACHE = 'llama-drive-v1';
+// Offline support.
+// - The page itself is network-first and bypasses the HTTP cache (GitHub Pages sends
+//   max-age=600, which otherwise kept serving an old build for up to 10 minutes).
+// - Everything else is cache-first (Vite asset names are content-hashed).
+// - version.json is never cached: the game uses it to spot a newer build.
+const CACHE = 'llama-drive-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html'])));
@@ -8,15 +11,22 @@ self.addEventListener('install', (e) => {
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(self.clients.claim());
+  e.waitUntil(
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
+  );
 });
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== location.origin) return;
+  if (url.pathname.endsWith('/version.json')) return; // straight to the network
   if (req.mode === 'navigate') {
     e.respondWith(
-      fetch(req)
+      fetch(req.url, { cache: 'no-store' })
         .then((res) => {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));

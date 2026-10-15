@@ -11,10 +11,21 @@ function buildNumber() {
   }
 }
 
+const BUILD = buildNumber();
+
 export default defineConfig({
+  plugins: [
+    {
+      // version.json lets an installed copy notice a newer deploy and update itself.
+      name: 'version-file',
+      generateBundle() {
+        this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD }) });
+      },
+    },
+  ],
   // Relative base so the build works from any GitHub Pages sub-path.
   base: './',
-  define: { __BUILD_NUMBER__: JSON.stringify(buildNumber()) },
+  define: { __BUILD_NUMBER__: JSON.stringify(BUILD) },
   build: {
     target: 'es2020',
     chunkSizeWarningLimit: 3000,
