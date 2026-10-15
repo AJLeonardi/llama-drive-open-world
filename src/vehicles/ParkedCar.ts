@@ -33,7 +33,7 @@ function wheelsFor(track: number, wb: number, r: number) {
   return out;
 }
 
-const GLASS = 0x1d2733;
+const GLASS = 0x46586a;
 
 function geometryFor(style: ParkedStyle, color: number): THREE.BufferGeometry {
   const key = `${style}-${color}`;

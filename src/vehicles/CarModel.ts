@@ -61,8 +61,9 @@ export function carMaterials() {
       headlight: new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4dc, emissiveIntensity: 1.1, roughness: 0.1, metalness: 0.2 }),
       taillight: new THREE.MeshStandardMaterial({ color: 0x700000, emissive: 0xff1616, emissiveIntensity: 0.9, roughness: 0.2 }),
       glass: new THREE.MeshStandardMaterial({
-        color: 0x18222c, metalness: 0.1, roughness: 0.04, transparent: true, opacity: 0.5,
-        side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 1.6,
+        // Nearly clear: easy to see through from the cockpit, faint reflections show it's glass.
+        color: 0xd4e2ec, metalness: 0.0, roughness: 0.05, transparent: true, opacity: 0.12,
+        side: THREE.DoubleSide, depthWrite: false, envMapIntensity: 0.5,
       }),
       glassCracked: new THREE.MeshStandardMaterial({
         color: 0xe8f0f4, map: crackTexture(), metalness: 0, roughness: 0.3, transparent: true, opacity: 0.88,
