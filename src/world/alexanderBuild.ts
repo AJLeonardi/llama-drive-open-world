@@ -57,7 +57,7 @@ export function buildAlexander(k: TownKit) {
 
   // ------------------------------------------------ ground: a lawn under the town, sidewalks, junctions
   k.flat('town-lawn', -240, 240, F - 5, RAIL + 40, Y + 0.06, 6, 64);
-  k.sidewalks();
+  k.sidewalks((a) => a < -ALEX.edge - TOWN_HW - 2); // (none out on the farm lane)
   k.junctions(false);
   k.lamps(0, F, 0, B2, HW + 2.4, 30);
 
@@ -368,16 +368,19 @@ function railcar(k: TownKit, a: number, b: number, color: number, hopper: boolea
  */
 function farm(k: TownKit, rng: Rng, take: (a: number, b: number, sa: number, sb: number) => void) {
   const Y = k.Y, F = ALEX.farm, E = ALEX.edge;
-  const drive = 400;
-  // The drive in from West Street, and the arched sign over it.
+  const drive = F.drive;
+  // The farm lane in from West Street (a road: outer.ts), and the arched sign over it.
   {
     const it = k.item(-((E + F.d0) / 2 + 30), drive);
-    k.strip(it, 'town-walk', -(E + TOWN_HW), drive, -(F.d0 + 90), drive, 6, Y + 0.08, 4);
-    take(-(E + F.d0 + 90) / 2, drive, F.d0 + 90 - E, 10);
+    take(-(E + F.yard) / 2, drive, F.yard - E, 12);
+    take(-F.yard, drive, 2 * F.r + 12, 2 * F.r + 12);
     const sd = F.d0 + 6;
-    for (const s of [-1, 1]) k.box(it, -sd, drive + s * 4.6, Y, 0.45, 5.4, 0.45, 0x6b4a2e, true);
-    k.box(it, -sd, drive, Y + 5.2, 0.4, 0.4, 10, 0x6b4a2e);
+    for (const s of [-1, 1]) k.box(it, -sd, drive + s * 6, Y, 0.45, 5.4, 0.45, 0x6b4a2e, true);
+    k.box(it, -sd, drive, Y + 5.2, 0.4, 0.4, 12.8, 0x6b4a2e);
     k.board(it, ['ALEXANDER ACRES'], '#7a2a1e', '#f4ecd8', -sd, drive, Y + 3.9, 8.6, 1.3, -Math.PI / 2);
+    // A big shade tree in the middle of the farmyard's turning circle, hay bales round it.
+    k.tree(-F.yard, drive, 'broad');
+    for (let j = 0; j < 5; j++) bale(k, it, -F.yard + Math.cos(j * 1.26) * 5.5, drive + Math.sin(j * 1.26) * 5.5);
   }
   // The barn, red with white trim, its doors facing the yard, and the silo beside it.
   {

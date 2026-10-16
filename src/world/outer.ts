@@ -799,24 +799,26 @@ function street(t: Town, pts: [number, number][], hw = TOWN_HW, look: CurveRoad[
 function loopRoad(t: Town, mainB: number, half: number): CurveRoad {
   const h = HIGHWAYS[t.hw];
   const pts: Vec2[] = [], hs: number[] = [];
-  const bez = (p1: Vec2, k1: Vec2, k2: Vec2, p2: Vec2, h1: number, h2: number) =>
+  // (From the highway's own height beside each point, so the road doesn't float over
+  // the highway's ground where it runs alongside it, easing to the town's.)
+  const bez = (p1: Vec2, k1: Vec2, k2: Vec2, p2: Vec2, fromHighway: boolean) =>
     bezier(p1, k1, k2, p2, 26).forEach((p, i) => {
+      const hh = profileAt(h, highwayCoords(h, p[0], p[1]).s);
       pts.push(p);
-      hs.push(lerp(h1, h2, smoothstep(0.1, 0.9, i / 26)));
+      hs.push(lerp(hh, t.level, smoothstep(0.1, 0.9, fromHighway ? i / 26 : 1 - i / 26)));
     });
   // (The ends sit on the highway's edge, running along it.)
   const edge = (ss: number, dir: number): [Vec2, Vec2] => {
     const q = pointAt(h, ss), e = besideHighway(h, ss, t.side * (HW - 3));
     return [e, [e[0] + q.ux * dir * 150, e[1] + q.uz * dir * 150]];
   };
-  const hIn = profileAt(h, t.s - TOWN_EXIT), hOut = profileAt(h, t.s + TOWN_EXIT);
   const [in0, in1] = edge(t.s - TOWN_EXIT, 1), [out0, out1] = edge(t.s + TOWN_EXIT, -1);
-  bez(in0, in1, townPoint(t, -half - 120, mainB), townPoint(t, -half, mainB), hIn, t.level);
+  bez(in0, in1, townPoint(t, -half - 120, mainB), townPoint(t, -half, mainB), true);
   for (let i = 1; i < 18; i++) {
     pts.push(townPoint(t, -half + (2 * half * i) / 18, mainB));
     hs.push(t.level);
   }
-  bez(townPoint(t, half, mainB), townPoint(t, half + 120, mainB), out1, out0, t.level, hOut);
+  bez(townPoint(t, half, mainB), townPoint(t, half + 120, mainB), out1, out0, false);
   return { kind: 'town', pts, hs, hw: TOWN_HW, closed: false, from: h.id, to: h.id, look: 'street', ...bbox(pts) };
 }
 
@@ -1000,7 +1002,7 @@ function makeAlexander(avoid: Town[]): Town | null {
   if (!spot) return null;
   const t = townOff('Alexander-ville', 'alexander', spot.h, spot.s, spot.side, { a0: -300, a1: 300, b0: 95, b1: 610 });
   t.annex = { a0: -ALEX.farm.d1 - 20, a1: -280, b0: ALEX.farm.b0 - 20, b1: 610 };
-  const F = ALEX.front, [B1, B2, B3] = ALEX.avenues, E = ALEX.edge;
+  const F = ALEX.front, [B1, B2, B3] = ALEX.avenues, E = ALEX.edge, Y = ALEX.farm;
   t.road = loopRoad(t, F, E);
   t.roads = [
     t.road,
@@ -1008,14 +1010,24 @@ function makeAlexander(avoid: Town[]): Town | null {
     ...ALEX.avenues.map((b) => street(t, [[-E, b], [E, b]])),
     street(t, [[-E, F], [-E, B1], [-E, B2], [-E, B3]]),
     street(t, [[E, F], [E, B1], [E, B2], [E, B3]]),
+    // Out to Alexander Acres: the farm lane off West Street, and round the farmyard.
+    street(t, [[-E, Y.drive], [-(Y.yard - Y.r), Y.drive]], Y.hw),
+    street(t, Array.from({ length: 21 }, (_, i): [number, number] => {
+      const ang = (i / 20) * Math.PI * 2;
+      return [-Y.yard + Math.cos(ang) * Y.r, Y.drive + Math.sin(ang) * Y.r];
+    }), Y.hw),
   ];
   return t;
 }
 /** Alexander-ville's plan (town coordinates): Front Street, the avenues, the side streets' `a`, the railroad. */
 export const ALEX = {
   front: 150, avenues: [260, 370, 480], edge: 220, rail: 565,
-  /** Alexander Acres, the farm out past West Street: how far west of Main Street it reaches (d = −a), and its b. */
-  farm: { d0: 300, d1: 540, b0: 330, b1: 590 },
+  /**
+   * Alexander Acres, the farm out past West Street: how far west of Main Street it reaches
+   * (d = −a), and its b; the farm lane (at b = `drive`) out to the farmyard, a turning
+   * circle (radius `r`) `yard` west of Main Street between the barn and the farmhouse.
+   */
+  farm: { d0: 300, d1: 540, b0: 330, b1: 590, drive: 400, yard: 400, r: 14, hw: 4.5 },
 };
 
 /** Where Washington DC is (its middle) and its streets, in city coordinates (a east, b south). */

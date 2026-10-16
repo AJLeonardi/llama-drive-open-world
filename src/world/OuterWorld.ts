@@ -26,6 +26,8 @@ import { textPanel } from './landmarks';
 const N = CHUNK / TERRAIN_CELL; // cells per chunk side
 /** Distances (m) from the player to a chunk's nearest point. */
 const LOAD = 950, UNLOAD = 1350, PHYSICS_ON = 260, PHYSICS_OFF = 420, VIEW = 900;
+/** Ground closer than this to the car must be built, with physics, whatever the frame budget. */
+const NEAR_GROUND = 90;
 const FRAME_BUDGET_MS = 3;
 const ROAD_LIFT = 0.15;
 const V_REPEAT = 16;
@@ -135,6 +137,23 @@ export class OuterWorld {
   update(dt: number, camera: THREE.Vector3Like, player: THREE.Vector3Like) {
     this.blink = (this.blink + dt) % 1.6;
     this.glow.color.setHex(this.blink < 0.5 ? 0xff2a1a : 0x3a0806);
+
+    // If the building has fallen behind (a slow device, a fast car) and the car is about
+    // to reach ground that isn't built yet, finish it now: a stutter beats falling
+    // through the world.
+    for (let ix = Math.floor((player.x - NEAR_GROUND) / CHUNK); ix <= Math.floor((player.x + NEAR_GROUND) / CHUNK); ix++)
+      for (let iz = Math.floor((player.z - NEAR_GROUND) / CHUNK); iz <= Math.floor((player.z + NEAR_GROUND) / CHUNK); iz++) {
+        const c = this.chunks.get(chunkKey(ix, iz)) ?? this.chunkAt(ix, iz);
+        if (!c || c.colliders) continue;
+        if (c.job) {
+          const t = performance.now();
+          while (!this.step(c));
+          if (this.building === c) this.building = null;
+          c.group.visible = true;
+          console.log(`[perf] ground ahead not built in time: finished it now (${(performance.now() - t).toFixed(0)} ms)`);
+        }
+        this.physicsOn(c);
+      }
 
     // Keep building whatever is in progress, within this frame's budget.
     const t0 = performance.now();
