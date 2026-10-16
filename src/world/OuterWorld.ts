@@ -18,7 +18,7 @@ import { TREE_KINDS, TRUNK_RADIUS, TreeKind, treeDepthMaterial, treeGeometry, tr
 import { townItems, townMaterials, townTreeSpots } from './townBuild';
 import { bushGeometry, bushMaterial } from './bushes';
 import { mulberry32, smoothstep } from '../util/math';
-import { heightfieldCollider, terrainPatch } from './terrain';
+import { groundPiece, terrainPatch } from './terrain';
 import { ROAD_ORDER, normalizeAttributes } from './batch';
 import { box, cyl, paint } from '../vehicles/builders/geo';
 import { textPanel } from './landmarks';
@@ -256,7 +256,7 @@ export class OuterWorld {
       c.heights = new Float32Array((N + 1) * (N + 1));
       for (let r = 0; r <= N; r++) for (let k = 0; k <= N; k++) c.heights[r * (N + 1) + k] = h[(r + 1) * S + (k + 1)];
       const heights = c.heights;
-      c.solids.push(() => heightfieldCollider(this.physics, N + 1, N + 1, heights, x0 + CHUNK / 2, z0 + CHUNK / 2));
+      c.solids.push(() => groundPiece(this.physics, x0, z0, N + 1, N + 1, (k, r) => heights[r * (N + 1) + k]));
       yield;
     }
     // --- road surfaces

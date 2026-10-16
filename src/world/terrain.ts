@@ -22,8 +22,29 @@ export function sampleTerrain(): Terrain {
   return { cols, rows, heights };
 }
 
+/** How far (cells) each terrain collider reaches past the area it owns (see Physics.registerGround). */
+export const GROUND_OVERLAP = 2;
+
+/**
+ * A terrain collider for the area x0..x0+cols-1 cells (z likewise), reaching GROUND_OVERLAP
+ * cells further all round; `inside(c, r)` gives the heights within the area, heightAt the rest.
+ */
+export function groundPiece(physics: Physics, x0: number, z0: number, cols: number, rows: number, inside: (c: number, r: number) => number) {
+  const M = GROUND_OVERLAP, C = cols + 2 * M, R = rows + 2 * M;
+  const h = new Float32Array(C * R);
+  for (let r = 0; r < R; r++)
+    for (let c = 0; c < C; c++) {
+      const ci = c - M, ri = r - M;
+      h[r * C + c] = ci >= 0 && ci < cols && ri >= 0 && ri < rows ? inside(ci, ri) : heightAt(x0 + ci * TERRAIN_CELL, z0 + ri * TERRAIN_CELL);
+    }
+  const w = (cols - 1) * TERRAIN_CELL, d = (rows - 1) * TERRAIN_CELL;
+  const col = heightfieldCollider(physics, C, R, h, x0 + w / 2, z0 + d / 2);
+  physics.registerGround(col, x0, z0, x0 + w, z0 + d);
+  return col;
+}
+
 export function addTerrainCollider(physics: Physics, t: Terrain) {
-  heightfieldCollider(physics, t.cols, t.rows, t.heights, (WORLD.x0 + WORLD.x1) / 2, (WORLD.z0 + WORLD.z1) / 2);
+  groundPiece(physics, WORLD.x0, WORLD.z0, t.cols, t.rows, (c, r) => t.heights[r * t.cols + c]);
 }
 
 /** Interpolated height from the sampled grid (matches the physics surface). */

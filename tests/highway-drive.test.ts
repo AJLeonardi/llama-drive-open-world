@@ -54,7 +54,7 @@ function driveCurve(physics: Physics, pts: readonly (readonly [number, number])[
     }
     prev = v;
   }
-  physics.world.removeRigidBody(car.body);
+  physics.removeBody(car.body);
   if (target !== pts.length && process.env.TRACE) {
     const p = car.body.translation();
     console.log(`stuck at ${target}/${pts.length}: car ${p.x.toFixed(0)},${p.y.toFixed(1)},${p.z.toFixed(0)} v=${car.speed.toFixed(1)} next h=${hs[target].toFixed(1)}`);
@@ -154,7 +154,7 @@ describe('driving highway country', () => {
         expect(target, 'reached the end of the ramp').toBe(pts.length);
         expect(airborne / steps).toBeLessThan(0.03);
         expect(maxJolt).toBeLessThan(2.5);
-        physics.world.removeRigidBody(car.body);
+        physics.removeBody(car.body);
       }
   }, 60000);
 
