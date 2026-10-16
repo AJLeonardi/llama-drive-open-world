@@ -98,7 +98,8 @@ export class ImpactTracker {
       if (!p) {
         const ob = other.parent();
         const dyn = ob && ob.isDynamic();
-        const ov = dyn ? ob.linvel() : { x: 0, y: 0, z: 0 };
+        // Kinematic bodies (a friend's car) move too: their speed counts toward the closing speed.
+        const ov = ob && !ob.isFixed() ? ob.linvel() : { x: 0, y: 0, z: 0 };
         p = {
           impulse: 0, px: 0, py: 0, pz: 0, nx: 0, ny: 0, nz: 0, w: 0, age: 0,
           vx: this.pre.x, vy: this.pre.y, vz: this.pre.z, ox: ov.x, oy: ov.y, oz: ov.z,

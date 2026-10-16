@@ -296,6 +296,8 @@ export class Minimap {
   private dest: Vec2 | null = null;
   private route: Vec2[] | null = null;
   private routeAge = 0;
+  /** The friend's car when playing together (shown like a destination, so you can drive to it). */
+  private friend: Destination | null = null;
   /** Car pose (for the big map). */
   private car = { x: 0, z: 0, fx: 0, fz: 1 };
   /** Big map view: centre (world metres) and zoom (CSS px per metre). */
@@ -462,7 +464,7 @@ export class Minimap {
     let { x, z } = this.toWorld(px, py);
     // A tap on (or right next to) a place's icon goes to that place.
     const snap = 26 / this.view.zoom;
-    for (const d of DESTINATIONS) if (Math.hypot(d.x - x, d.z - z) < snap) (x = d.x), (z = d.z);
+    for (const d of this.places()) if (Math.hypot(d.x - x, d.z - z) < snap) (x = d.x), (z = d.z);
     this.setDest([x, z]);
     this.redraw();
   }
@@ -489,6 +491,17 @@ export class Minimap {
   }
 
   /** Called with the car's pose when the big map opens: start centred on the car. */
+  /** Where the friend's car is (null: not playing together, or their car isn't out). */
+  setFriend(at: { x: number; z: number } | null) {
+    if (!at) this.friend = null;
+    else if (this.friend) (this.friend.x = at.x), (this.friend.z = at.z);
+    else this.friend = { x: at.x, z: at.z, icon: '🚙', label: 'Friend' };
+  }
+
+  private places() {
+    return this.friend ? [...DESTINATIONS, this.friend] : DESTINATIONS;
+  }
+
   drawBig(x: number, z: number, fx: number, fz: number) {
     this.car = { x, z, fx, fz };
     this.view = { x, z, zoom: 0.3 };
@@ -545,7 +558,7 @@ export class Minimap {
           g.fillText(hw.name, lx, ly);
         }
     }
-    for (const d of DESTINATIONS) {
+    for (const d of this.places()) {
       const dx = X(d.x), dy = Z(d.z);
       if (dx < -60 || dx > w + 60 || dy < -60 || dy > h + 60) continue;
       g.font = `${Math.max(22, small * 0.07)}px sans-serif`;
@@ -623,7 +636,7 @@ export class Minimap {
     };
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    const marks = this.dest ? [...DESTINATIONS, { x: this.dest[0], z: this.dest[1], icon: '📍', label: '' }] : DESTINATIONS;
+    const marks = this.dest ? [...this.places(), { x: this.dest[0], z: this.dest[1], icon: '📍', label: '' }] : this.places();
     for (const d of marks) {
       const [sx, sy] = toScreen(d.x, d.z);
       const vx = sx - r, vy = sy - r, dist = Math.hypot(vx, vy);

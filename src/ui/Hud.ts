@@ -1,6 +1,6 @@
 import { CAR_IDS, CarId, MPH_PER_MS, SPECS } from '../vehicles/VehicleSpec';
 
-export type Screen = 'loading' | 'title' | 'select' | 'driving' | 'paused' | 'wrecked' | 'underwater';
+export type Screen = 'loading' | 'title' | 'select' | 'driving' | 'paused' | 'wrecked' | 'underwater' | 'together';
 
 export interface HudCallbacks {
   play(): void;
@@ -15,6 +15,8 @@ export interface HudCallbacks {
   nextCamera(): void;
   flip(): void;
   peekDamage(): void;
+  /** Play together (from the title or the garage menu); while connected, the menu button leaves instead. */
+  together(): void;
 }
 
 const html = (s: string) => {
@@ -40,6 +42,9 @@ export class Hud {
   private fpsEl!: HTMLElement;
   private soundBtn!: HTMLElement;
   private wreckPanel!: HTMLElement;
+  private togetherBtn!: HTMLElement;
+  private toastEl!: HTMLElement;
+  private toastTimer = 0;
   current: Screen = 'loading';
 
   constructor(cb: HudCallbacks) {
@@ -86,10 +91,14 @@ export class Hud {
       <div class="screen dim">
         <h1>LLAMA DRIVE</h1>
         <div class="subtitle">OPEN WORLD</div>
-        <button class="big">▶ PLAY</button>
+        <div class="title-buttons">
+          <button class="big" data-act="play">▶ PLAY</button>
+          <button class="big blue" data-act="together">👫 PLAY TOGETHER</button>
+        </div>
         <div class="build">Build ${__BUILD_NUMBER__}</div>
       </div>`);
-    tap(title.querySelector('.big'), cb.play);
+    tap(title.querySelector('[data-act=play]'), cb.play);
+    tap(title.querySelector('[data-act=together]'), cb.together);
 
     const cards = CAR_IDS.map((id) => {
       const s = SPECS[id], st = CAR_STATS[id];
@@ -110,12 +119,17 @@ export class Hud {
           <button class="big" data-act="resume">▶ Keep driving</button>
           <button class="big blue" data-act="newcar">🚙 New car</button>
           <button class="big orange" data-act="over">↺ Start over</button>
+          <button class="big blue" data-act="together">👫 Play together</button>
         </div>
         <button class="big gray" data-act="sound">🔊 Sound on</button>
       </div>`);
     tap(menu.querySelector('[data-act=resume]'), cb.resume);
     tap(menu.querySelector('[data-act=newcar]'), cb.newCar);
     tap(menu.querySelector('[data-act=over]'), cb.startOver);
+    this.togetherBtn = menu.querySelector('[data-act=together]')!;
+    tap(this.togetherBtn, cb.together);
+    this.toastEl = html(`<div class="friend-toast"></div>`);
+    this.root.appendChild(this.toastEl);
     this.soundBtn = menu.querySelector('[data-act=sound]')!;
     tap(this.soundBtn, () => {
       const on = cb.toggleSound();
@@ -160,6 +174,25 @@ export class Hud {
       onTap();
     });
     this.root.appendChild(b);
+  }
+
+  /** A screen built elsewhere (the play-together screens). */
+  addScreen(name: Screen, el: HTMLElement) {
+    this.screens.set(name, el);
+    this.root.appendChild(el);
+  }
+
+  /** While playing together, the garage menu's button leaves instead. */
+  setTogether(connected: boolean) {
+    this.togetherBtn.textContent = connected ? '👋 Stop playing together' : '👫 Play together';
+  }
+
+  /** A short message near the top that fades away. */
+  toast(text: string) {
+    this.toastEl.textContent = text;
+    this.toastEl.classList.add('on');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('on'), 3500);
   }
 
   private add(name: Screen, markup: string) {

@@ -24,6 +24,9 @@ import type { ParkedCar } from '../vehicles/ParkedCar';
 import { SURFACES } from '../physics/surfaces';
 import { mountainWeight } from '../world/biomes';
 import { MAX_HEALTH } from '../damage/Damage';
+import { Together } from '../ui/Together';
+import type { Link } from '../net/Link';
+import { Multiplayer } from './Multiplayer';
 
 type State = 'loading' | 'title' | 'select' | 'drive' | 'paused' | 'wrecked' | 'sinking';
 
@@ -53,6 +56,11 @@ export class Game {
   private cameras!: Cameras;
   private tracker!: ImpactTracker;
   private minimap!: Minimap;
+  private together: Together;
+  /** Playing together with a friend's device (null: playing alone). */
+  private mp: Multiplayer | null = null;
+  /** Where the play-together screens were opened from (to go back there). */
+  private togetherFrom: 'title' | 'paused' = 'title';
 
   private car: Vehicle | null = null;
   private carId: CarId = 'bronco';
@@ -62,6 +70,7 @@ export class Game {
   private stateTimer = 0;
   private upsideTimer = 0;
   private smokeAcc = 0;
+  private friendSmoke = 0;
   private titleAngle = 0;
   /** Where a mid-game respawn puts the car (updated while driving). */
   private safeSpot: { x: number; y: number; z: number; heading: number } | null = null;
@@ -124,7 +133,14 @@ export class Game {
         this.upsideTimer = 0;
       },
       peekDamage: () => this.cameras.reset('orbit'),
+      together: () => this.openTogether(),
     });
+    this.together = new Together({
+      connected: (link, isHost) => this.onConnected(link, isHost),
+      back: () => this.hud.show(this.togetherFrom),
+      click: () => this.audio.click(),
+    }, this.debug);
+    this.hud.addScreen('together', this.together.el);
     this.hud.show('loading');
     // Tapping the mini-map opens the big map and pauses the game while it's open.
     this.minimap = new Minimap(document.getElementById('ui')!, (open) => {
@@ -192,6 +208,39 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- flow
+  /** Play-together screens; while connected, the same button leaves instead. */
+  private openTogether() {
+    this.audio.unlock();
+    this.audio.click();
+    if (this.mp) {
+      this.mp.leave();
+      return;
+    }
+    if (this.state !== 'title' && this.state !== 'paused') return;
+    this.togetherFrom = this.state;
+    this.hud.show('together');
+    this.together.open();
+  }
+
+  private onConnected(link: Link, isHost: boolean) {
+    const mp = new Multiplayer(link, isHost, this.physics, this.scene);
+    this.mp = mp;
+    mp.onLeave = () => {
+      if (this.mp !== mp) return;
+      this.mp = null;
+      this.hud.setTogether(false);
+      this.minimap.setFriend(null);
+      this.hud.toast('👋 Your friend left');
+    };
+    this.hud.setTogether(true);
+    this.audio.chime();
+    if (this.togetherFrom === 'title') this.showSelect();
+    else {
+      this.hud.show('paused');
+      this.pause(false);
+    }
+  }
+
   private onPlay() {
     this.audio.unlock();
     this.audio.click();
@@ -223,7 +272,9 @@ export class Game {
       this.buildingDamage.clear();
       this.world.reset({ x: SPAWN.x, y: 0, z: SPAWN.z });
     }
-    const at = spot ?? { x: SPAWN.x, y: 0, z: SPAWN.z, heading: SPAWN.heading };
+    // Playing together, the friend who joined starts a little behind, so the cars don't land on each other.
+    const back = this.mp && !this.mp.isHost ? 12 : 0;
+    const at = spot ?? { x: SPAWN.x - Math.sin(SPAWN.heading) * back, y: 0, z: SPAWN.z - Math.cos(SPAWN.heading) * back, heading: SPAWN.heading };
     this.safeSpot = { ...at };
     this.endUnderwater();
     this.world.outer.ensureAround(at); // out in highway country the ground may not be built yet
@@ -303,6 +354,13 @@ export class Game {
       fog.far = 680 + 200 * this.clearAir;
     }
 
+    if (this.mp) {
+      const out = this.state === 'title' || this.state === 'select' || this.state === 'loading' ? null : this.car;
+      this.mp.update(performance.now(), dt, out);
+      const f = this.mp.friend;
+      this.minimap.setFriend(f && { x: f.x, z: f.z });
+    }
+
     switch (this.state) {
       case 'title':
         this.titleCamera(dt);
@@ -345,8 +403,10 @@ export class Game {
     const input = this.state === 'drive' ? this.controls.read(dt) : NO_INPUT;
     this.acc += dt;
     let steps = 0;
+    const now = performance.now();
     while (this.acc >= FIXED_DT && steps < 4) {
       car.fixedUpdate(FIXED_DT, input, this.world.queries);
+      this.mp?.fixedStep(now - Math.max(0, this.acc - FIXED_DT) * 1000);
       this.tracker.beforeStep();
       this.physics.step();
       car.snapshot();
@@ -541,6 +601,14 @@ export class Game {
       while (this.smokeAcc > 1) {
         this.smokeAcc -= 1;
         this.particles.smokePuff(car.smokeOrigin(tmpV), dmg);
+      }
+    }
+    const friend = this.mp?.remoteCar;
+    if (friend && friend.damage > 0.25) {
+      this.friendSmoke += dt * (friend.damage >= 1 ? 20 : 2 + (friend.damage - 0.25) * 24);
+      while (this.friendSmoke > 1) {
+        this.friendSmoke -= 1;
+        this.particles.smokePuff(tmpV.copy(friend.model.smokePoint).applyMatrix4(friend.model.root.matrixWorld), friend.damage);
       }
     }
     // Dust, grass bits and splashes kicked up by the wheels; tire smoke when skidding.

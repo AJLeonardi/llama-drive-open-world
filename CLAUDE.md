@@ -43,6 +43,7 @@ FPS/draw-call/triangle overlay, logs `[crash]` impacts and `[perf]` world build 
 - **Car body vs ground.** Terrain is several heightfield pieces (`terrain.ts:groundPiece`, overlapping by two cells); `Physics.step` lets a car's body box touch only the piece it's over, and none at all while an upright car is clearly off the ground now and one step ahead. Soft-CCD look-ahead contacts otherwise catch seams and heightfield vertices with bad normals and stop a fast car dead ("phantom crashes", `tests/ground-contact.test.ts`).
 - **Physics streaming.** Props and parked cars only get Rapier bodies within ~150 m of the player and lose them beyond ~210 m once at rest (`Breakable.stream`, `ParkedCar.activate/deactivate`). Thousands of idle bodies cost several ms per step, even when sleeping. Static colliders (buildings, sidewalks) stay permanently.
 - **Crashes.** `physics/Impacts.ts` groups Rapier contact-force events per partner over `IMPACT_WINDOW` into one `Impact`. It **caps the impulse at reduced mass × pre-crash closing speed**, because Rapier's force totals include penetration correction and explode for fast or wedged contacts. It needs `tracker.beforeStep()` called before every `physics.step()`. `damage/Damage.ts` holds the pure, unit-tested formulas (car damage from Δv; object damage scaled by car mass, so heavier cars smash harder).
+- **Playing together** (same Wi-Fi, no server). `ui/Together.ts`: one device shows a QR code (offer), the other scans it and shows its answer, the first scans that (`ui/QrScanner.ts`, jsQR and qrcode-generator loaded lazily). `net/signal.ts` squeezes a data-channel SDP into ~130 characters (ICE ufrag/pwd, fingerprint, DTLS role, UDP host candidates) and rebuilds it; `net/Link.ts` is the RTCPeerConnection with two pre-agreed channels (unreliable `state`, reliable `events`). Each device runs its own world and car: `game/Multiplayer.ts` sends our car's state ~20×/s (`net/carState.ts`) and shows the friend's as a `vehicles/RemoteCar.ts` (kinematic body, interpolated ~110 ms behind), which you can bump into; each side works out its own car's damage. Props and parked cars are not shared. In debug mode the screens also show the code as text with a paste box (desktop testing).
 - **Car models.** `vehicles/builders/geo.ts` provides `sculpt()` (smooth lofted bodies from `keyframes`, with wheel-arch cut-outs), `patch()` (doors and hoods cut from the body surface, keeping its normals), and `rbox`/`latheX`/`tube`/`blob`. Every part goes through `ModelBuilder.part()` with a `Finish` (shared PBR materials in `CarModel.ts`). `Deformer.ts` dents geometry in place, capped against the original positions, then recomputes normals.
 
 ## Conventions and gotchas
@@ -59,6 +60,6 @@ FPS/draw-call/triangle overlay, logs `[crash]` impacts and `[perf]` world build 
 
 ## Planned next steps (not built yet)
 
-Getting out of the car and taking over parked cars (parked cars would become `Vehicle`s), and
-same-Wi-Fi multiplayer over WebRTC with a QR-code handshake (no internet or signaling server).
-`Controls.read()` returning a plain `DriveInput` is the seam where a remote player would plug in.
+Getting out of the car and taking over parked cars (parked cars would become `Vehicle`s).
+Playing together still needs testing on the real iPad + iPhone (desktop Chrome automation can't
+open a WebRTC connection between its own tabs).
