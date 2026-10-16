@@ -36,9 +36,10 @@ describe('world layout', () => {
   });
 
   it('the places are a few seconds apart at Bronco speed (~47 m/s)', () => {
+    // (NYC is further out east, towards Mariano-ville.)
     const gap = NYC.x0 - BOSTON.x1;
-    expect(gap / 47).toBeGreaterThan(5.5);
-    expect(gap / 47).toBeLessThan(7.5);
+    expect(gap / 47).toBeGreaterThan(15);
+    expect(gap / 47).toBeLessThan(25);
     // Track (north) and park (south) are each 4–7 s from the city corners.
     for (const d of [BOSTON.z0 - TRACK_BOUNDS.z1, DEMO_PARK.z0 - BOSTON.z1]) {
       expect(d / 47).toBeGreaterThan(4);

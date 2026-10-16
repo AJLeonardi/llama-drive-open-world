@@ -6,7 +6,7 @@
 import {
   ALL_ROADS, BOSTON, BOSTON_COMMON, CENTRAL_PARK, DEMO_PARK, HARBOR, HARBOR_X, LAKE, LOOP, MOUNTAIN, NYC, OUTER, RIVER, Road, TRACK, WORLD,
 } from '../world/layout';
-import { HIGHWAYS, MAIN_ST, OUTER_LAKES, RAMPS, RING, TOWN, pointAt, profileAt, townPoint } from '../world/outer';
+import { ALEX, DC, DC_PLAN, HIGHWAYS, MAIN_ST, OUTER_LAKES, RAMPS, RING, TOWNS, pointAt, profileAt, townPoint } from '../world/outer';
 import { RING_APOTHEM, HEX, hexDistance } from '../world/bounds';
 import { findRoute } from '../world/route';
 import { FieldKind, biomeAt, fieldKind, mountainWeight } from '../world/biomes';
@@ -35,12 +35,12 @@ export const DESTINATIONS: Destination[] = [
   ...countryDestinations(),
 ];
 
-/** Places out in highway country: the town, the highest mountain pass, the farms. */
+/** Places out in highway country: the towns, the highest mountain pass, the farms. */
 function countryDestinations(): Destination[] {
   const out: Destination[] = [];
-  if (TOWN) {
-    const [x, z] = townPoint(TOWN, 0, MAIN_ST + 55);
-    out.push({ x, z, icon: '🍁', label: 'Mariano-ville' });
+  for (const t of TOWNS) {
+    const [x, z] = t.kind === 'mariano' ? townPoint(t, 0, MAIN_ST + 55) : t.kind === 'alexander' ? townPoint(t, 0, ALEX.avenues[0]) : townPoint(t, ...DC_PLAN.monument);
+    out.push({ x, z, icon: t.kind === 'mariano' ? '🍁' : t.kind === 'alexander' ? '🌾' : '🏛️', label: t.name });
   }
   // The top of the highest pass, and the middle of farm country.
   let pass: Destination | null = null, top = -Infinity, farm: Destination | null = null, farmBest = 0;
@@ -179,7 +179,18 @@ function countryPaths() {
   RING.pts.forEach(([x, z], i) => (i ? highways.lineTo(x, z) : highways.moveTo(x, z)));
   highways.closePath();
   const ramps = new Path2D();
-  for (const r of [...RAMPS, ...(TOWN ? [TOWN.road] : [])]) r.pts.forEach(([x, z], i) => (i ? ramps.lineTo(x, z) : ramps.moveTo(x, z)));
+  for (const r of [...RAMPS, ...TOWNS.flatMap((t) => t.roads)]) r.pts.forEach(([x, z], i) => (i ? ramps.lineTo(x, z) : ramps.moveTo(x, z)));
+  // Washington DC: the city's ground, with the Mall's lawn down the middle.
+  const city = new Path2D(), lawn = new Path2D();
+  const rect = (p: Path2D, a0: number, b0: number, a1: number, b1: number) => {
+    const c = [townPoint(DC, a0, b0), townPoint(DC, a1, b0), townPoint(DC, a1, b1), townPoint(DC, a0, b1)];
+    c.forEach(([x, z], i) => (i ? p.lineTo(x, z) : p.moveTo(x, z)));
+    p.closePath();
+  };
+  rect(city, DC_PLAN.x0 - 10, DC_PLAN.z0 - 10, DC_PLAN.x1 + 10, DC_PLAN.z1 + 10);
+  rect(lawn, DC_PLAN.mall.x0, -DC_PLAN.mall.z, DC_PLAN.mall.x1, DC_PLAN.mall.z);
+  rect(lawn, -230, DC_PLAN.z0, 0, -DC_PLAN.mall.z);
+  rect(lawn, DC_PLAN.x0, DC_PLAN.mall.z, 0, DC_PLAN.z1);
   const lakes = new Path2D();
   for (const l of OUTER_LAKES) {
     lakes.moveTo(l.x + l.r, l.z);
@@ -197,7 +208,7 @@ function countryPaths() {
     else hills.lineTo(Math.cos(m) * R, Math.sin(m) * R);
   });
   hills.closePath();
-  return { highways, ramps, lakes, hills };
+  return { highways, ramps, lakes, hills, city, lawn };
 }
 
 function arrow(g: CanvasRenderingContext2D, x: number, y: number, size: number, angle: number, fill: string) {
@@ -248,6 +259,10 @@ function paintWorld(g: CanvasRenderingContext2D, middle: HTMLCanvasElement, land
   g.fillStyle = 'rgba(110, 125, 90, 0.35)';
   g.fill(paths.hills, 'evenodd');
   g.drawImage(middle, WORLD.x0, WORLD.z0, WORLD.x1 - WORLD.x0, WORLD.z1 - WORLD.z0);
+  g.fillStyle = '#d9d4c8';
+  g.fill(paths.city);
+  g.fillStyle = '#6fae52';
+  g.fill(paths.lawn);
   g.fillStyle = '#4b93cf';
   g.fill(paths.lakes);
   g.lineCap = 'round';

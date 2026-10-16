@@ -4,7 +4,7 @@ import { HEALTHY, VehicleSim } from '../src/vehicles/VehicleSim';
 import { SPECS } from '../src/vehicles/VehicleSpec';
 import { CHUNK, TERRAIN_CELL } from '../src/world/bounds';
 import { heightAt, surfaceAt } from '../src/world/layout';
-import { CROSSINGS, HIGHWAYS, Highway, RAMPS, TOWN, besideHighway, bridgeSolids, highwayCoords, pointAt, profileAt } from '../src/world/outer';
+import { CROSSINGS, DC, HIGHWAYS, Highway, RAMPS, TOWN, TOWNS, besideHighway, bridgeSolids, highwayCoords, pointAt, profileAt } from '../src/world/outer';
 import { heightfieldCollider } from '../src/world/terrain';
 import { addSolid } from '../src/world/OuterWorld';
 
@@ -170,6 +170,21 @@ describe('driving highway country', () => {
       expect(run.maxJolt).toBeLessThan(2.5);
     }
   }, 60000);
+
+  it('the loop road through Alexander-ville, and every road into Washington DC, can be driven both ways', async () => {
+    const roads = [TOWNS.find((t) => t.kind === 'alexander')!.road, ...DC.roads.filter((r) => r.from >= 0)];
+    for (const r of roads) {
+      const mid = r.pts[Math.floor(r.pts.length / 2)];
+      const physics = await groundAround(mid[0], mid[1], 650);
+      for (const backwards of [false, true]) {
+        const pts = backwards ? [...r.pts].reverse() : r.pts, hs = backwards ? [...r.hs].reverse() : r.hs;
+        const run = driveCurve(physics, pts, hs, 18);
+        expect(run.reached, `${mid.map(Math.round)} backwards=${backwards}`).toBe(true);
+        expect(run.airborneFrac).toBeLessThan(0.03);
+        expect(run.maxJolt).toBeLessThan(2.5);
+      }
+    }
+  }, 120000);
 
   it('a winding mountain highway can be driven at speed, in lane', async () => {
     // The mountain highway that strays furthest from a straight line.

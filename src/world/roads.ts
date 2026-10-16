@@ -193,8 +193,8 @@ interface Junction { x: number; z: number; arms: Arm[] }
  * Every place where roads meet: crossings (4 arms), T-junctions (a road ending on
  * another) and merges, as a centre point and the directions roads leave it in.
  */
-export function findJunctions(): Junction[] {
-  const roads = ALL_ROADS.filter((r) => r.kind !== 'dirt');
+export function findJunctions(all: Road[] = ALL_ROADS): Junction[] {
+  const roads = all.filter((r) => r.kind !== 'dirt');
   const found: Junction[] = [];
   /** Arms of `road` leaving point P, which lies `t` of the way along segment `i`. */
   const armsAt = (road: Road, i: number, t: number): Arm[] => {
@@ -276,7 +276,12 @@ function flatQuad(pts: [number, number][], y: number, uvScale: number) {
  */
 export function addIntersections(batch: StaticBatch) {
   const inCity = (x: number, z: number) => inAABB(x, z, BOSTON, 2) || inAABB(x, z, NYC, 2);
-  for (const j of findJunctions()) {
+  junctionPatches((key, g) => batch.add(key, g), ALL_ROADS, ROAD_Y, inCity);
+}
+
+/** The junction pieces for `roads` at road height `y`, handed to `add` with the junction's spot. */
+export function junctionPatches(add: (key: string, g: THREE.BufferGeometry, x: number, z: number) => void, roads: Road[], y: number, city: (x: number, z: number) => boolean) {
+  for (const j of findJunctions(roads)) {
     const sinMin = Math.min(...j.arms.flatMap((a) => j.arms.filter((b) => b !== a).map((b) => Math.abs(a.ux * b.uz - a.uz * b.ux))).filter((s) => s > 0.05));
     if (!(sinMin > 0.45)) continue; // a merge: leave it to draw order
     if (!j.arms.some((a) => j.arms.some((b) => Math.abs(a.ux * b.uz - a.uz * b.ux) > 0.3))) continue; // one road running straight on
@@ -291,27 +296,27 @@ export function addIntersections(batch: StaticBatch) {
       }
       return Math.min(40, L + 0.8);
     });
-    const city = inCity(j.x, j.z);
+    const zebra = city(j.x, j.z);
     j.arms.forEach((a, k) => {
       const L = reach[k];
       const px = -a.uz, pz = a.ux; // across the arm
       const at = (along: number, across: number): [number, number] => [j.x + a.ux * along + px * across, j.z + a.uz * along + pz * across];
       // Plain asphalt over the overlap.
-      batch.add('road-plain', flatQuad([at(0, -a.hw), at(L, -a.hw), at(L, a.hw), at(0, a.hw)], ROAD_Y + 0.012, 14));
+      add('road-plain', flatQuad([at(0, -a.hw), at(L, -a.hw), at(L, a.hw), at(0, a.hw)], y + 0.012, 14), j.x, j.z);
       // Stop line across the lanes coming in (on their right: entering, you travel along -u).
-      batch.add('road-marks', flatQuad([at(L + 0.2, 0.3), at(L + 0.7, 0.3), at(L + 0.7, a.hw - 0.8), at(L + 0.2, a.hw - 0.8)], ROAD_Y + 0.02, 1));
-      if (city) {
+      add('road-marks', flatQuad([at(L + 0.2, 0.3), at(L + 0.7, 0.3), at(L + 0.7, a.hw - 0.8), at(L + 0.2, a.hw - 0.8)], y + 0.02, 1), j.x, j.z);
+      if (zebra) {
         // Zebra crossing just beyond the stop line, across the whole road.
         for (let w = -a.hw + 1; w < a.hw - 1; w += 1.3)
-          batch.add('road-marks', flatQuad([at(L + 1.4, w), at(L + 4.4, w), at(L + 4.4, w + 0.65), at(L + 1.4, w + 0.65)], ROAD_Y + 0.02, 1));
+          add('road-marks', flatQuad([at(L + 1.4, w), at(L + 4.4, w), at(L + 4.4, w + 0.65), at(L + 1.4, w + 0.65)], y + 0.02, 1), j.x, j.z);
       }
     });
     // Fill the middle.
     const disc = new THREE.CircleGeometry(maxHw, 20);
     disc.rotateX(-Math.PI / 2);
-    disc.translate(j.x, ROAD_Y + 0.012, j.z);
+    disc.translate(j.x, y + 0.012, j.z);
     const uv = disc.attributes.uv as THREE.BufferAttribute, pos = disc.attributes.position;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, pos.getX(i) / 14, pos.getZ(i) / 14);
-    batch.add('road-plain', disc);
+    add('road-plain', disc, j.x, j.z);
   }
 }

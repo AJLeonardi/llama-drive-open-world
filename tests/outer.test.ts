@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CROSSINGS, HIGHWAYS, HW, OUTER_LAKES, RAMPS, RING, TOWERS, TOWN, highwayCoords, outerRoadAt, pointAt, profileAt, tightestRadius, OVERPASS_RISE } from '../src/world/outer';
+import { ALEXANDER, CROSSINGS, DC, HIGHWAYS, HW, OUTER_LAKES, RAMPS, RING, TOWERS, TOWN, TOWNS, forNearHighways, highwayCoords, nearestCurve, outerRoadAt, pointAt, profileAt, tightestRadius, townDistance, townPoint, OVERPASS_RISE } from '../src/world/outer';
 import { RING_APOTHEM, hexDistance } from '../src/world/bounds';
-import { biomeAt } from '../src/world/biomes';
+import { biomeAt, mountainWeight } from '../src/world/biomes';
 import { heightAt, surfaceAt } from '../src/world/layout';
 
 const BRONCO = 47; // m/s
@@ -124,4 +124,90 @@ describe('highway country', () => {
     expect(n).toBeGreaterThan(20);
     expect(rise / n).toBeGreaterThan(120);
   });
+
+  it('has three towns: Mariano-ville, Alexander-ville and Washington DC', () => {
+    expect(TOWNS.map((t) => t.name).sort()).toEqual(['Alexander-ville', 'Mariano-ville', 'Washington DC']);
+    for (const a of TOWNS) for (const b of TOWNS) if (a !== b) expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThan(2500);
+  });
+
+  it('Alexander-ville is out in farm country, close under the mountains but not in them', () => {
+    const t = ALEXANDER!;
+    let near = 0;
+    for (let a = t.area.a0; a <= t.area.a1; a += 50)
+      for (let b = t.area.b0; b <= t.area.b1; b += 50) {
+        const [x, z] = townPoint(t, a, b);
+        expect(biomeAt(x, z).farm, `${a},${b}`).toBeGreaterThan(0.8);
+        expect(mountainWeight(x, z)).toBeLessThan(0.02);
+      }
+    const [cx, cz] = townPoint(t, 0, (t.area.b0 + t.area.b1) / 2);
+    for (let k = 0; k < 36; k++) near = Math.max(near, mountainWeight(cx + Math.cos(k / 5.73) * 1400, cz + Math.sin(k / 5.73) * 1400));
+    expect(near).toBeGreaterThan(0.5);
+  });
+
+  it('Washington DC sits in the triangle between RT 4, RT 6 and RT 8, with roads in from three highways', () => {
+    expect(Math.hypot(DC.x + 3450, DC.z - 2850)).toBeLessThan(300);
+    const named = (n: string) => HIGHWAYS.find((h) => h.name === n)!;
+    // South of RT 4, east of RT 6, west of RT 8 (each passes by on that side of it).
+    expect(highwayCoords(named('RT 4'), DC.x, DC.z).d * Math.sign(highwayCoords(named('RT 4'), -3200, 1200).d)).toBeLessThan(0);
+    for (const n of ['RT 6', 'RT 8']) expect(Math.abs(highwayCoords(named(n), DC.x, DC.z).d)).toBeLessThan(1200);
+    expect(new Set(DC.exits.map((e) => e.hw)).size).toBe(3);
+    expect(DC.exits.length).toBe(6); // each road in splits to join its highway both ways
+  });
+
+  it('every town street ends on another road, and the roads in end on a highway', () => {
+    for (const t of TOWNS)
+      for (const r of t.roads)
+        for (const end of [r.pts[0], r.pts[r.pts.length - 1]]) {
+          let onHighway = false;
+          forNearHighways(end[0], end[1], (h, s, d) => {
+            if (Math.abs(d) < HW && s > 0 && s < h.len) onHighway = true;
+          });
+          const onStreet = t.roads.some((o) => o !== r && o.pts.some(([x, z], i) => i < o.pts.length - 1 && segDist(end, [x, z], o.pts[i + 1]) < o.hw + 1));
+          expect(onHighway || onStreet, `${t.name}: road end at ${end.map(Math.round)}`).toBe(true);
+        }
+  });
+
+  it('the roads into town are gentle, and run into nothing on the way', () => {
+    for (const t of TOWNS)
+      for (const r of t.roads) {
+        if (r.from < 0) continue;
+        expect(tightestRadius(r.pts), t.name).toBeGreaterThan(45);
+        for (let i = 1; i < r.pts.length; i++) {
+          const run = Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]);
+          expect(Math.abs(r.hs[i] - r.hs[i - 1]) / run, t.name).toBeLessThan(0.085);
+        }
+        for (const [x, z] of r.pts.slice(3, -1)) {
+          forNearHighways(x, z, (h, s, d) => {
+            if (h.id !== r.from) expect(Math.abs(d) < HW + 8 && s > 0 && s < h.len, `${t.name} road in crosses ${h.name}`).toBe(false);
+          });
+          for (const ramp of RAMPS) expect(ramp.pts.some(([px, pz]) => Math.hypot(px - x, pz - z) < 20), `${t.name} road in runs into a ramp`).toBe(false);
+        }
+      }
+  });
+
+  it('the towns are on level ground, clear of highways, ramps and radio towers', () => {
+    for (const t of TOWNS) {
+      for (const area of [t.area, ...(t.annex ? [t.annex] : [])])
+      for (let a = area.a0; a <= area.a1; a += 20)
+        for (let b = area.b0; b <= area.b1; b += 20) {
+          const [x, z] = townPoint(t, a, b);
+          if (OUTER_LAKES.some((l) => Math.hypot(l.x - x, l.z - z) < l.r + 14)) continue;
+          // Level, or on one of the town's own roads (the roads in slope down to it).
+          const c = nearestCurve(x, z);
+          if (c.edge > 30) expect(Math.abs(heightAt(x, z) - t.level), `${t.name} ${a},${b}`).toBeLessThan(0.05);
+          forNearHighways(x, z, (h, s, d) => expect(Math.abs(d) < HW + 10 && s > 0 && s < h.len, `${t.name}: ${h.name} at ${a},${b}`).toBe(false));
+        }
+      for (const r of RAMPS) for (const [x, z] of r.pts) expect(townDistance(t, x, z)).toBeGreaterThan(40);
+      for (const tw of TOWERS) expect(townDistance(t, tw.x, tw.z)).toBeGreaterThan(100);
+      // Streets are asphalt, the rest is lawn.
+      const [sx, sz] = t.road.pts[Math.floor(t.road.pts.length / 2)];
+      expect(surfaceAt(sx, sz)).toBe('asphalt');
+    }
+  });
 });
+
+function segDist(p: readonly [number, number], a: readonly [number, number], b: readonly [number, number]) {
+  const dx = b[0] - a[0], dz = b[1] - a[1], l2 = dx * dx + dz * dz || 1;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2));
+  return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dz * t);
+}

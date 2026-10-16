@@ -2,9 +2,9 @@
 
 /**
  * The detailed middle of the map (cities, track, park, mountain): its terrain and
- * physics are built once at start-up on an 8 m grid.
+ * physics are built once at start-up on an 8 m grid. (It reaches further east, where NYC is.)
  */
-export const WORLD = { x0: -1536, x1: 1536, z0: -1536, z1: 1536 };
+export const WORLD = { x0: -1536, x1: 2048, z0: -1536, z1: 1536 };
 /** The whole drivable map: the highway country beyond WORLD is streamed in chunks. */
 export const OUTER = { x0: -6144, x1: 6144, z0: -6144, z1: 6144 };
 /** Streamed chunk size (m); WORLD's edges sit on chunk boundaries. */

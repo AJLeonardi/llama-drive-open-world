@@ -9,7 +9,7 @@ import { Physics, RAPIER } from '../physics/Physics';
 import { CHUNK, OUTER, TERRAIN_CELL, WORLD } from './bounds';
 import {
   CROSSINGS, CURVES, CurveRoad, HIGHWAYS, HW, Highway, OUTER_LAKES, PROFILE_STEP, RAMPS, Solid, TOWERS, besideHighway, bridgeSolids, forNearHighways, highwayCoords, outerLakeAt, outerRoadAt,
-  TOWN, nearestCurve, pointAt, profileAt, townCoords,
+  TOWNS, nearestCurve, pointAt, profileAt, townAt, townDistance,
 } from './outer';
 import { heightAt, surfaceAt } from './layout';
 import type { Surface } from '../physics/surfaces';
@@ -278,8 +278,8 @@ export class OuterWorld {
       }
     for (const r of RAMPS) this.exitSigns(c, r, inChunk);
     this.townSigns(c, inChunk);
-    // The town: its pieces that stand in this chunk.
-    if (TOWN && Math.hypot(TOWN.x - (x0 + CHUNK / 2), TOWN.z - (z0 + CHUNK / 2)) < CHUNK + 600)
+    // The towns: their pieces that stand in this chunk.
+    if (TOWNS.some((t) => townDistance(t, x0 + CHUNK / 2, z0 + CHUNK / 2) < CHUNK))
       for (const it of townItems(inChunk)) {
         for (const [k, g] of it.geos) this.add(c, k, g);
         for (const b of it.solids) c.solids.push(() => addSolid(this.physics, b));
@@ -321,7 +321,7 @@ export class OuterWorld {
     };
     const inChunk = (x: number, z: number) => x >= c.x0 && x < c.x0 + CHUNK && z >= c.z0 && z < c.z0 + CHUNK;
     const clear = (x: number, z: number) =>
-      !outerRoadAt(x, z) && !outerRoadAt(x + 3, z) && !outerRoadAt(x - 3, z) && !outerRoadAt(x, z + 3) && !outerRoadAt(x, z - 3) && !outerLakeAt(x, z);
+      !outerRoadAt(x, z) && !outerRoadAt(x + 3, z) && !outerRoadAt(x - 3, z) && !outerRoadAt(x, z + 3) && !outerRoadAt(x, z - 3) && !outerLakeAt(x, z) && !townAt(x, z, 10);
     const spots: [number, number][] = [];
     // Verges of the highways crossing this chunk.
     for (const hw of HIGHWAYS) {
@@ -369,16 +369,17 @@ export class OuterWorld {
 
   /**
    * Trees: thick forest in the forest (red and gold in its autumn part), snowy pines on
-   * the lower mountain slopes, a few along the farm hedges, maples in town. They crowd
-   * the verges of the roads (that's what you see) and thin out further off. Never on a
-   * road, in water, on a cliff, in a farmyard or in the middle of town. Solid trunks.
+   * the lower mountain slopes, a few along the farm hedges, and the towns' own (maples in
+   * Mariano-ville, shade trees elsewhere). They crowd the verges of the roads (that's
+   * what you see) and thin out further off. Never on a road, in water, on a cliff, in a
+   * farmyard or in a town (other than its own). Solid trunks.
    */
   private trees(c: Chunk, h: Float32Array, S: number) {
     const rng = mulberry32(c.ix * 92821 + c.iz * 68917 + 11);
     const mid = biomeAt(c.x0 + CHUNK / 2, c.z0 + CHUNK / 2);
     const corners = [[0, 0], [CHUNK, 0], [0, CHUNK], [CHUNK, CHUNK]].map(([dx, dz]) => biomeAt(c.x0 + dx, c.z0 + dz));
     const wooded = Math.max(...[mid, ...corners].map((b) => b.forest + b.mountain + b.farm * 0.2));
-    const nearTown = TOWN && Math.hypot(TOWN.x - (c.x0 + CHUNK / 2), TOWN.z - (c.z0 + CHUNK / 2)) < CHUNK + 600;
+    const nearTown = TOWNS.some((t) => townDistance(t, c.x0 + CHUNK / 2, c.z0 + CHUNK / 2) < CHUNK);
     if (wooded < 0.05 && !nearTown) return;
     const inChunk = (x: number, z: number) => x >= c.x0 && x < c.x0 + CHUNK && z >= c.z0 && z < c.z0 + CHUNK;
     const roadFree = (x: number, z: number, m: number) => {
@@ -411,8 +412,7 @@ export class OuterWorld {
       let p = b.forest * (verge ? 0.95 : 0.8) + b.mountain * (g.y < 260 ? 0.7 : 0.15) + (hedge ? b.farm * 0.5 : b.farm * 0.02);
       if (g.slope > (b.mountain > 0.5 ? 0.85 : 0.6)) p = 0;
       if (rng() > p) return;
-      const tc = townCoords(x, z);
-      if (tc && Math.abs(tc.a) < 300 && tc.b > 80 && tc.b < 385) return;
+      if (townAt(x, z, 15)) return;
       if (c.clearings.some(([cx, cz, r]) => Math.hypot(x - cx, z - cz) < r)) return;
       if (TOWERS.some((t) => Math.abs(t.x - x) < 8 && Math.abs(t.z - z) < 8)) return;
       if (!roadFree(x, z, 7)) return;
@@ -439,8 +439,8 @@ export class OuterWorld {
     for (const r of CURVES) if (!(r.x1 < c.x0 - 100 || r.x0 > c.x0 + CHUNK + 100 || r.z1 < c.z0 - 100 || r.z0 > c.z0 + CHUNK + 100)) along(r.pts, r.hw);
     // Then dotted about everywhere else.
     for (let i = 0; i < 200 + 300 * Math.min(1, wooded); i++) tryAt(c.x0 + rng() * CHUNK, c.z0 + rng() * CHUNK, false);
-    // Maples in town.
-    if (nearTown) for (const [x, z] of townTreeSpots()) if (inChunk(x, z)) plant(x, z, 'autumn', 0.85 + rng() * 0.35);
+    // The towns' trees.
+    if (nearTown) for (const [x, z, kind] of townTreeSpots()) if (inChunk(x, z)) plant(x, z, kind, 0.85 + rng() * 0.35);
     for (const kind of TREE_KINDS) {
       const mats = list.get(kind)!;
       if (!mats.length) continue;
@@ -487,7 +487,7 @@ export class OuterWorld {
     for (const [x, z, face] of spots.sort(() => rng() - 0.5)) {
       if (built >= 2 || rng() < 0.35) continue;
       if (x < c.x0 + 40 || x > c.x0 + CHUNK - 40 || z < c.z0 + 40 || z > c.z0 + CHUNK - 40) continue;
-      if (c.clearings.some(([cx, cz]) => Math.hypot(cx - x, cz - z) < 160)) continue;
+      if (c.clearings.some(([cx, cz]) => Math.hypot(cx - x, cz - z) < 160) || townAt(x, z, 120)) continue;
       // Flat, dry and clear of every road.
       let lo = Infinity, hi = -Infinity, clear = true;
       for (let dx = -30; dx <= 30 && clear; dx += 15)
@@ -570,35 +570,33 @@ export class OuterWorld {
     }
   }
 
-  /** Green signs on the highway before each end of the town road: EXIT, Mariano-ville. */
+  /** Green signs on the highway before each road into a town: NEXT EXIT, then EXIT and the town's name. */
   private townSigns(c: Chunk, inChunk: (x: number, z: number) => boolean) {
-    if (!TOWN) return;
-    const h = HIGHWAYS[TOWN.hw];
-    const r = TOWN.road;
-    for (const [end, dir] of [[0, 1], [r.pts.length - 1, -1]] as const) {
-      const sEnd = highwayCoords(h, r.pts[end][0], r.pts[end][1]).s;
-      for (const back of [80, 400]) {
-        const ss = sEnd - dir * back;
-        const [x, z] = besideHighway(h, ss, TOWN.side * (HW + 3));
-        if (!inChunk(x, z)) continue;
-        const u = pointAt(h, ss);
-        const tx = u.ux * dir, tz = u.uz * dir;
-        const rightX = -tz, rightZ = tx;
-        const arrow = (-u.uz * TOWN.side) * rightX + (u.ux * TOWN.side) * rightZ > 0 ? '↗' : '↖';
-        const lines = back > 200 ? ['Mariano-ville', 'NEXT EXIT'] : ['EXIT ' + arrow, 'Mariano-ville'];
-        const key = lines.join('|');
-        let tex = this.signTextures.get(key);
-        if (!tex) this.signTextures.set(key, (tex = textPanel(lines)));
-        const y = profileAt(h, ss);
-        const sign = new THREE.Mesh(this.signGeo, new THREE.MeshBasicMaterial({ map: tex }));
-        sign.position.set(x, y + 5.4, z);
-        sign.rotation.y = Math.atan2(-tx, -tz);
-        sign.updateMatrix();
-        sign.matrixAutoUpdate = false;
-        c.group.add(sign);
-        for (const o of [-2.8, 2.8]) this.add(c, 'plain', box({ at: [x + tz * o, y + 2, z - tx * o], size: [0.25, 4, 0.25], color: 0x7d8288 }));
+    for (const t of TOWNS)
+      for (const e of t.exits) {
+        const h = HIGHWAYS[e.hw];
+        for (const back of [80, 400]) {
+          const ss = e.s - e.dir * back;
+          const [x, z] = besideHighway(h, ss, e.side * (HW + 3));
+          if (!inChunk(x, z)) continue;
+          const u = pointAt(h, ss);
+          const tx = u.ux * e.dir, tz = u.uz * e.dir;
+          const rightX = -tz, rightZ = tx;
+          const arrow = (-u.uz * e.side) * rightX + (u.ux * e.side) * rightZ > 0 ? '↗' : '↖';
+          const lines = back > 200 ? [t.name, 'NEXT EXIT'] : ['EXIT ' + arrow, t.name];
+          const key = lines.join('|');
+          let tex = this.signTextures.get(key);
+          if (!tex) this.signTextures.set(key, (tex = textPanel(lines)));
+          const y = profileAt(h, ss);
+          const sign = new THREE.Mesh(this.signGeo, new THREE.MeshBasicMaterial({ map: tex }));
+          sign.position.set(x, y + 5.4, z);
+          sign.rotation.y = Math.atan2(-tx, -tz);
+          sign.updateMatrix();
+          sign.matrixAutoUpdate = false;
+          c.group.add(sign);
+          for (const o of [-2.8, 2.8]) this.add(c, 'plain', box({ at: [x + tz * o, y + 2, z - tx * o], size: [0.25, 4, 0.25], color: 0x7d8288 }));
+        }
       }
-    }
   }
 
   /** The runs of a highway whose segments start inside this chunk (every 12.5 m). */
@@ -626,7 +624,7 @@ export class OuterWorld {
     flush();
   }
 
-  /** The runs of a curved road (ramp or Ring) whose segments start inside this chunk. */
+  /** The runs of a curved road (ramp, town road or Ring) whose segments start inside this chunk. */
   private curveRibbon(c: Chunk, r: CurveRoad) {
     if (r.x1 < c.x0 - 50 || r.x0 > c.x0 + CHUNK + 50 || r.z1 < c.z0 - 50 || r.z0 > c.z0 + CHUNK + 50) return;
     const n = r.pts.length, segs = r.closed ? n : n - 1;
@@ -635,7 +633,7 @@ export class OuterWorld {
     // Ramps taper in and out of the highways like real exit/entry lanes (no square ends).
     const taper = (i: number) => (r.kind === 'ramp' ? r.hw * (0.25 + 0.75 * smoothstep(0, 5, Math.min(i, n - 1 - i))) : r.hw);
     const flush = () => {
-      if (run.length > 1) this.add(c, r.kind === 'ramp' ? 'road-ramp' : r.kind === 'town' ? 'road-street' : 'road-highway', ribbon(run, r.hw, 0));
+      if (run.length > 1) this.add(c, r.kind === 'ramp' ? 'road-ramp' : r.kind === 'town' ? `road-${r.look ?? 'street'}` : 'road-highway', ribbon(run, r.hw, 0));
       run = [];
     };
     for (let i = 0; i < segs; i++) {

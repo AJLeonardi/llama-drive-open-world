@@ -10,7 +10,8 @@
 // shape. Where two highways cross, the newer one goes over on a bridge and four ramps
 // link them, one in each corner. Each highway's height follows a smoothed version of the
 // land (never steeper than MAX_GRADE), and the land is cut and filled to meet it.
-// Lakes and radio towers dot the country, and a small town sits off one highway.
+// Lakes and radio towers dot the country, and there are towns: two just off a highway,
+// and Washington DC with roads in from three of them.
 import { clamp, lerp, mulberry32, smoothstep, type Vec2 } from '../util/math';
 import { FAMILY_NORMALS, HEX, OUTER, RING_APOTHEM, WORLD, hexDistance } from './bounds';
 import { terrainBase } from './hills';
@@ -67,14 +68,16 @@ export interface Crossing {
   flat: number;
 }
 
-/** A curved road (an interchange ramp, the Ring, or the town road) as points with a road height at each. */
+/** A curved road (an interchange ramp, the Ring, or a town road) as points with a road height at each. */
 export interface CurveRoad {
   kind: 'ramp' | 'ring' | 'town';
+  /** Town roads: which lane markings (default: a two-lane street). */
+  look?: 'street' | 'avenue';
   pts: Vec2[];
   hs: number[];
   hw: number;
   closed: boolean;
-  /** Ramps: the highway they leave from and the one they join (the town road: its highway, twice). */
+  /** Ramps: the highway they leave from and the one they join (roads into town: their highway, twice; streets −1). */
   from: number;
   to: number;
   x0: number; z0: number; x1: number; z1: number;
@@ -85,6 +88,8 @@ export interface Tower { x: number; z: number; h: number }
 
 /** Distance outside WORLD (negative inside). */
 export const outsideWorld = (x: number, z: number) => Math.max(WORLD.x0 - x, x - WORLD.x1, WORLD.z0 - z, z - WORLD.z1);
+/** Distance outside the square at the heart of the map, which the highways run straight past. */
+const outsideCore = (x: number, z: number) => Math.max(Math.abs(x), Math.abs(z)) - 1536;
 
 function bbox(pts: readonly Vec2[]) {
   let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
@@ -186,7 +191,7 @@ const FAMILY_PHASE = [0.5, 0, 0];
  * harbour, the track, the park, Thunder Mountain with its lake, and Beacon Hill.
  */
 const KEEP_OUT = [
-  { x0: -1600, x1: 1080, z0: -660, z1: 660 }, // Boston, harbour, highway, NYC
+  { x0: -1600, x1: 1680, z0: -660, z1: 660 }, // Boston, harbour, highway, NYC
   { x0: -260, x1: 260, z0: -890, z1: -660 }, // dirt track
   { x0: 540, x1: 880, z0: -1100, z1: -720 }, // Thunder Mountain and lake
   { x0: -180, x1: 200, z0: 660, z1: 1080 }, // demolition park
@@ -196,7 +201,7 @@ const KEEP_OUT = [
 // (Where along each city ring road they start was searched for, so that their crossings
 // stay clear of the other interchanges.)
 const SPURS: { x: number; z: number; ux: number; uz: number }[] = [
-  { x: 1058, z: -200, ux: 1, uz: 0 }, // east, from NYC's ring road
+  { x: 1658, z: -200, ux: 1, uz: 0 }, // east, from NYC's ring road
   { x: -700, z: -448, ux: 0, uz: -1 }, // north, from Boston's ring road
   { x: -540, z: 448, ux: 0, uz: 1 }, // south, from Boston's ring road
 ];
@@ -265,7 +270,7 @@ function curvedLine(l: Line, crossAt: number[], amp: number, seed: number) {
     let w = l.spur ? 0 : amp;
     if (w > 0) {
       w *= smoothstep(STRAIGHT_NEAR, CURVE_IN, t) * smoothstep(STRAIGHT_NEAR, CURVE_IN, l.len - t);
-      w *= smoothstep(200, 900, outsideWorld(bx, bz)) * (1 - smoothstep(RING_APOTHEM - 1100, RING_APOTHEM - 500, hexDistance(bx, bz)));
+      w *= smoothstep(200, 900, outsideCore(bx, bz)) * (1 - smoothstep(RING_APOTHEM - 1100, RING_APOTHEM - 500, hexDistance(bx, bz)));
       for (const sc of crossAt) w *= smoothstep(STRAIGHT_NEAR, CURVE_IN, Math.abs(t - sc));
     }
     const A = w * lerp(260, 470, mountainWeight(bx, bz));
@@ -700,39 +705,190 @@ function makeRamps(): CurveRoad[] {
 }
 export const RAMPS: CurveRoad[] = makeRamps();
 
-// ---------------------------------------------------------------- the town
+// ---------------------------------------------------------------- towns
 
 /**
- * Maple Falls: a little New England town in the autumn woods, just off a highway. A
- * loop road leaves the highway, runs along Main Street in front of the town green and
- * comes back on again. Positions in the town are given along the highway (`a`) and
- * away from it (`b`), from the spot it's built off.
+ * Towns out in highway country, each on level ground with its own streets:
+ * Mariano-ville, a New England town in the autumn woods; Alexander-ville, a farm town
+ * at the foot of the mountains (both just off a highway, a loop road leaving it,
+ * running along the front of town and coming back on); and Washington DC, a city in
+ * the desert with roads in from three highways. Positions in a town are given in its
+ * own coordinates: `a` along (ux, uz) and `b` across, towards `side`. For the towns off
+ * a highway `a` runs along the highway and `b` away from it; in DC `a` is east and `b`
+ * south.
  */
 export interface Town {
+  name: string;
+  kind: 'mariano' | 'alexander' | 'dc';
   x: number;
   z: number;
-  /** Ground level of the town. */
-  level: number;
-  hw: number;
-  s: number;
-  /** Which side of the highway (+1 = left of travel). */
-  side: number;
-  /** Highway direction there. */
   ux: number;
   uz: number;
+  /** +1: `b` is to the left of (ux, uz) (with +x east, +z south, that's clockwise). */
+  side: number;
+  /** Ground level of the town. */
+  level: number;
+  /** The highway it's built off and where along it (DC: −1, 0). */
+  hw: number;
+  s: number;
+  /** The main road in: the loop off the highway and back (DC: the road in from the west). */
   road: CurveRoad;
+  /** Every road in town, the ones in from the highways included. */
+  roads: CurveRoad[];
+  /** Where the roads into town leave a highway (for the exit signs). */
+  exits: TownExit[];
+  /** The level part, in town coordinates (plus any `annex`), and how far the land takes to blend back. */
+  area: TownArea;
+  annex?: TownArea;
+  blend: number;
 }
-/** Main Street runs this far from the highway's centre line. */
+export interface TownArea { a0: number; a1: number; b0: number; b1: number }
+/** A road into town leaving a highway: where, which side, and the direction of travel that can take it. */
+export interface TownExit { hw: number; x: number; z: number; s: number; side: number; dir: number }
+
+/** Main Street runs this far from the highway's centre line (Mariano-ville). */
 export const MAIN_ST = 175;
-/** Where the town road leaves and rejoins the highway (along it, ± from the middle). */
+/** Where the loop road leaves and rejoins the highway (along it, ± from the middle). */
 const TOWN_EXIT = 470;
 
-/** A spot in town: `a` along the highway, `b` away from it. */
+/** A spot in town: `a` along, `b` across. */
 export function townPoint(t: Town, a: number, b: number): Vec2 {
   return [t.x + t.ux * a - t.uz * t.side * b, t.z + t.uz * a + t.ux * t.side * b];
 }
 
-function placeTown(): Town | null {
+/** Where a spot is in a town's own coordinates. */
+export function townCoords(t: Town, x: number, z: number) {
+  const dx = x - t.x, dz = z - t.z;
+  return { a: dx * t.ux + dz * t.uz, b: (-dx * t.uz + dz * t.ux) * t.side };
+}
+
+/** How far a spot is outside a town's level area (0 inside). */
+export function townDistance(t: Town, x: number, z: number) {
+  const { a, b } = townCoords(t, x, z);
+  const out = (r: TownArea) => Math.hypot(Math.max(0, r.a0 - a, a - r.a1), Math.max(0, r.b0 - b, b - r.b1));
+  return t.annex ? Math.min(out(t.area), out(t.annex)) : out(t.area);
+}
+
+/** A cubic Bézier from p1 to p2 (n + 1 points). */
+function bezier(p1: Vec2, k1: Vec2, k2: Vec2, p2: Vec2, n: number): Vec2[] {
+  const out: Vec2[] = [];
+  for (let i = 0; i <= n; i++) {
+    const u = i / n, m = 1 - u;
+    const a = m * m * m, b = 3 * m * m * u, c = 3 * m * u * u, d = u * u * u;
+    out.push([a * p1[0] + b * k1[0] + c * k2[0] + d * p2[0], a * p1[1] + b * k1[1] + c * k2[1] + d * p2[1]]);
+  }
+  return out;
+}
+
+/** A level street through town points (a, b), with a point at least every 25 m. */
+function street(t: Town, pts: [number, number][], hw = TOWN_HW, look: CurveRoad['look'] = 'street'): CurveRoad {
+  const w: Vec2[] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [a0, b0] = pts[i], [a1, b1] = pts[i + 1];
+    const n = Math.max(1, Math.ceil(Math.hypot(a1 - a0, b1 - b0) / 25));
+    for (let k = 0; k < n; k++) w.push(townPoint(t, a0 + ((a1 - a0) * k) / n, b0 + ((b1 - b0) * k) / n));
+  }
+  w.push(townPoint(t, ...pts[pts.length - 1]));
+  return { kind: 'town', pts: w, hs: w.map(() => t.level), hw, closed: false, from: -1, to: -1, look, ...bbox(w) };
+}
+
+/**
+ * The loop road: off the highway, a gentle S out to the front street (`mainB` from the
+ * highway), along it for ±`half`, and back on again.
+ */
+function loopRoad(t: Town, mainB: number, half: number): CurveRoad {
+  const h = HIGHWAYS[t.hw];
+  const pts: Vec2[] = [], hs: number[] = [];
+  const bez = (p1: Vec2, k1: Vec2, k2: Vec2, p2: Vec2, h1: number, h2: number) =>
+    bezier(p1, k1, k2, p2, 26).forEach((p, i) => {
+      pts.push(p);
+      hs.push(lerp(h1, h2, smoothstep(0.1, 0.9, i / 26)));
+    });
+  // (The ends sit on the highway's edge, running along it.)
+  const edge = (ss: number, dir: number): [Vec2, Vec2] => {
+    const q = pointAt(h, ss), e = besideHighway(h, ss, t.side * (HW - 3));
+    return [e, [e[0] + q.ux * dir * 150, e[1] + q.uz * dir * 150]];
+  };
+  const hIn = profileAt(h, t.s - TOWN_EXIT), hOut = profileAt(h, t.s + TOWN_EXIT);
+  const [in0, in1] = edge(t.s - TOWN_EXIT, 1), [out0, out1] = edge(t.s + TOWN_EXIT, -1);
+  bez(in0, in1, townPoint(t, -half - 120, mainB), townPoint(t, -half, mainB), hIn, t.level);
+  for (let i = 1; i < 18; i++) {
+    pts.push(townPoint(t, -half + (2 * half * i) / 18, mainB));
+    hs.push(t.level);
+  }
+  bez(townPoint(t, half, mainB), townPoint(t, half + 120, mainB), out1, out0, t.level, hOut);
+  return { kind: 'town', pts, hs, hw: TOWN_HW, closed: false, from: h.id, to: h.id, look: 'street', ...bbox(pts) };
+}
+
+/**
+ * Roads into a town from the highway its edge street faces: from `end` (on the town's
+ * edge, world coordinates) straight out along −`inward` to the nearest highway, where
+ * the road splits in two, one branch joining the highway each way, like a real exit.
+ * Heights are filled in later (`fillLink`), once the town's level is known.
+ */
+function linkRoads(end: Vec2, inward: Vec2): CurveRoad[] {
+  let hit: { h: Highway; s: number } | null = null;
+  for (let t = 20; t < 2000 && !hit; t += 10) {
+    const x = end[0] - inward[0] * t, z = end[1] - inward[1] * t;
+    forNearHighways(x, z, (h, s, d) => {
+      if (!hit && Math.abs(d) < HW && s > 0 && s < h.len) hit = { h, s };
+    });
+  }
+  if (!hit) return [];
+  const { h } = hit as { h: Highway; s: number };
+  const c = highwayCoords(h, end[0], end[1]);
+  const L = Math.abs(c.d), side = Math.sign(c.d);
+  const D = clamp(L * 0.8, 220, 420);
+  // Where it splits: as straight out as possible, but with both branches clear of the
+  // highway's ends and of interchanges (their ramps).
+  const busy = CROSSINGS.filter((k) => k.upper === h.id || k.lower === h.id).map((k) => (k.upper === h.id ? k.sUpper : k.sLower));
+  const ok = (s: number) => s - D > 150 && s + D < h.len - 150 && busy.every((sc) => Math.abs(sc - s) > D + 520);
+  let s0 = c.s;
+  for (let k = 0; k < 400 && !ok(s0); k++) s0 = c.s + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 10;
+  if (!ok(s0)) return [];
+  return [1, -1].map((dir) => {
+    const s1 = s0 - dir * D;
+    const q = pointAt(h, s1);
+    const p1 = besideHighway(h, s1, side * (HW - 3));
+    const k1: Vec2 = [p1[0] + q.ux * dir * D * 0.55, p1[1] + q.uz * dir * D * 0.55];
+    const k2: Vec2 = [end[0] - inward[0] * L * 0.5, end[1] - inward[1] * L * 0.5];
+    const pts = bezier(p1, k1, k2, end, 40);
+    return { kind: 'town', pts, hs: [], hw: RAMP_HW, closed: false, from: h.id, to: h.id, look: 'street', ...bbox(pts) } as CurveRoad;
+  });
+}
+
+/** Heights for a road in: the highway's own height while alongside it, easing to the town's. */
+function fillLink(r: CurveRoad, level: number) {
+  const h = HIGHWAYS[r.from], L = roadLength(r.pts);
+  let run = 0;
+  r.hs = r.pts.map(([x, z], i) => {
+    if (i) run += Math.hypot(x - r.pts[i - 1][0], z - r.pts[i - 1][1]);
+    return lerp(profileAt(h, highwayCoords(h, x, z).s), level, smoothstep(0.1, 0.9, run / L));
+  });
+}
+
+const roadLength = (pts: readonly Vec2[]) => pts.reduce((s, p, i) => (i ? s + Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
+
+/** The ends of a town's roads that sit on a highway's edge. */
+function exitsOf(roads: CurveRoad[]): TownExit[] {
+  const out: TownExit[] = [];
+  for (const r of roads)
+    for (const end of [0, r.pts.length - 1]) {
+      const [x, z] = r.pts[end], next = r.pts[end === 0 ? 1 : end - 1];
+      forNearHighways(x, z, (h, s, d) => {
+        if (Math.abs(Math.abs(d) - (HW - 3)) > 2 || s < 0 || s > h.len) return;
+        const p = pointAt(h, s);
+        out.push({ hw: h.id, x, z, s, side: Math.sign(d), dir: Math.sign((next[0] - x) * p.ux + (next[1] - z) * p.uz) });
+      });
+    }
+  return out;
+}
+
+/**
+ * The best spot off a highway for a town reaching `depth` m from it: `score` rates a
+ * spot (null: no good). Clear of interchanges, other highways, the Ring and other towns.
+ */
+function findSpot(depth: number, score: (h: Highway, s: number, side: number, level: number) => number | null, avoid: Town[]) {
   let best: { score: number; h: Highway; s: number; side: number } | null = null;
   for (const h of HIGHWAYS) {
     if (h.spur) continue;
@@ -742,67 +898,197 @@ function placeTown(): Town | null {
       const level = Math.abs(profileAt(h, s + TOWN_EXIT) - profileAt(h, s - TOWN_EXIT));
       if (level > 20) continue;
       for (const side of [-1, 1]) {
-        const cx = p.x - p.uz * side * 260, cz = p.z + p.ux * side * 260;
-        const b = biomeAt(cx, cz);
-        const score = b.forest * b.autumn - level * 0.01;
-        if (score < 0.6 || (best && score <= best.score)) continue;
+        const sc = score(h, s, side, level);
+        if (sc === null || (best && sc <= best.score)) continue;
         // Nothing else within reach of the town (the road along its far side included).
         let clear = true;
-        for (const [a, bb] of [[0, 260], [-260, 200], [260, 200], [0, 520], [-300, 420], [300, 420]]) {
+        for (const [a, bb] of [[0, 260], [-260, 200], [260, 200], [0, depth + 120], [-300, depth + 20], [300, depth + 20]]) {
           const q: Vec2 = [p.x + p.ux * a - p.uz * side * bb, p.z + p.uz * a + p.ux * side * bb];
           forNearHighways(q[0], q[1], (o, os, od) => {
             if (o !== h && Math.abs(od) < 200 && os > -50 && os < o.len + 50) clear = false;
           });
           if (hexDistance(q[0], q[1]) > RING_APOTHEM - 300) clear = false;
+          if (avoid.some((t) => townDistance(t, q[0], q[1]) < 900)) clear = false;
         }
+        const cx = p.x - p.uz * side * 260, cz = p.z + p.ux * side * 260;
         if (RAMPS.some((r) => r.pts.some(([x, z]) => Math.hypot(x - cx, z - cz) < 650))) clear = false;
-        if (clear) best = { score, h, s, side };
+        if (clear) best = { score: sc, h, s, side };
       }
     }
   }
-  if (!best) return null;
-  const { h, s, side } = best;
+  return best;
+}
+
+/** A town off highway `h` at `s`, on `side`: its frame and level (roads come after). */
+function townOff(name: string, kind: Town['kind'], h: Highway, s: number, side: number, area: Town['area']): Town {
   const p = pointAt(h, s);
   const level = (profileAt(h, s - TOWN_EXIT) + profileAt(h, s + TOWN_EXIT) + profileAt(h, s)) / 3;
-  const t: Town = { x: p.x, z: p.z, level, hw: h.id, s, side, ux: p.ux, uz: p.uz, road: null! };
-  // The road: off the highway, a gentle S out to Main Street, along it, and back.
-  const pts: Vec2[] = [], hs: number[] = [];
-  // (Points in world coordinates; the ends sit on the highway's edge, running along it.)
-  const bez = (p1: Vec2, k1: Vec2, k2: Vec2, p2: Vec2, n: number, h1: number, h2: number) => {
-    for (let i = 0; i <= n; i++) {
-      const u = i / n, m = 1 - u;
-      const a = m * m * m, b = 3 * m * m * u, c = 3 * m * u * u, d = u * u * u;
-      pts.push([a * p1[0] + b * k1[0] + c * k2[0] + d * p2[0], a * p1[1] + b * k1[1] + c * k2[1] + d * p2[1]]);
-      hs.push(lerp(h1, h2, smoothstep(0.1, 0.9, u)));
-    }
-  };
-  const edge = (ss: number, dir: number): [Vec2, Vec2] => {
-    const q = pointAt(h, ss), e = besideHighway(h, ss, side * (HW - 3));
-    return [e, [e[0] + q.ux * dir * 150, e[1] + q.uz * dir * 150]];
-  };
-  const hIn = profileAt(h, s - TOWN_EXIT), hOut = profileAt(h, s + TOWN_EXIT);
-  const MAIN_HALF = 230;
-  const [in0, in1] = edge(s - TOWN_EXIT, 1), [out0, out1] = edge(s + TOWN_EXIT, -1);
-  bez(in0, in1, townPoint(t, -MAIN_HALF - 120, MAIN_ST), townPoint(t, -MAIN_HALF, MAIN_ST), 26, hIn, level);
-  for (let i = 1; i < 18; i++) {
-    pts.push(townPoint(t, -MAIN_HALF + (2 * MAIN_HALF * i) / 18, MAIN_ST));
-    hs.push(level);
-  }
-  bez(townPoint(t, MAIN_HALF, MAIN_ST), townPoint(t, MAIN_HALF + 120, MAIN_ST), out1, out0, 26, level, hOut);
-  t.road = { kind: 'town', pts, hs, hw: TOWN_HW, closed: false, from: h.id, to: h.id, ...bbox(pts) };
+  return { name, kind, x: p.x, z: p.z, ux: p.ux, uz: p.uz, side, level, hw: h.id, s, road: null!, roads: [], exits: [], area, blend: 160 };
+}
+
+/**
+ * Mariano-ville: Main Street (the loop road) along the front, the town green behind it
+ * with a street down each side, Church Street across the top, and Maple and Oak Streets
+ * out at the ends.
+ */
+function makeMariano(): Town | null {
+  const spot = findSpot(400, (h, s, side, level) => {
+    const p = pointAt(h, s);
+    const b = biomeAt(p.x - p.uz * side * 260, p.z + p.ux * side * 260);
+    const score = b.forest * b.autumn - level * 0.01;
+    return score < 0.6 ? null : score;
+  }, []);
+  if (!spot) return null;
+  const t = townOff('Mariano-ville', 'mariano', spot.h, spot.s, spot.side, { a0: -300, a1: 300, b0: 95, b1: 400 });
+  t.road = loopRoad(t, MAIN_ST, 230);
+  const church = CHURCH_ST;
+  t.roads = [
+    t.road,
+    street(t, [[-123, MAIN_ST], [-123, church]]),
+    street(t, [[123, MAIN_ST], [123, church]]),
+    street(t, [[-230, church], [230, church]]),
+    street(t, [[-230, MAIN_ST], [-230, church]]),
+    street(t, [[230, MAIN_ST], [230, church]]),
+  ];
   return t;
 }
-export const TOWN: Town | null = placeTown();
+/** Mariano-ville's town green (town coordinates). */
+export const MARIANO_GREEN = { a: 115, b0: MAIN_ST + TOWN_HW + 6, b1: MAIN_ST + TOWN_HW + 106 };
+/** Mariano-ville's Church Street. */
+export const CHURCH_ST = MARIANO_GREEN.b1 + 16;
 
-/** Every curved road: the ramps, the town road and the Ring. */
-export const CURVES: CurveRoad[] = [...RAMPS, ...(TOWN ? [TOWN.road] : []), RING];
-
-/** Where a spot is relative to the town: along the highway, and away from it. */
-export function townCoords(x: number, z: number) {
-  if (!TOWN) return null;
-  const dx = x - TOWN.x, dz = z - TOWN.z;
-  return { a: dx * TOWN.ux + dz * TOWN.uz, b: (-dx * TOWN.uz + dz * TOWN.ux) * TOWN.side };
+/**
+ * Alexander-ville: a farm town out on the plains, the mountains rising close behind it.
+ * Front Street (the loop road) along the highway; Main Street straight back from it
+ * through a small grid of avenues, with the grain elevator and the railroad behind.
+ */
+function makeAlexander(avoid: Town[]): Town | null {
+  // Every corner of town (the farm out past West Street included) in farmland, well out
+  // in it, no mountain in it, but the mountains close by.
+  const spot = findSpot(560, (h, s, side, level) => {
+    const p = pointAt(h, s);
+    const at = (a: number, b: number): Vec2 => [p.x + p.ux * a - p.uz * side * b, p.z + p.uz * a + p.ux * side * b];
+    let farm = 1, mtn = 0;
+    for (const [a, b] of [[-300, 60], [0, 60], [300, 60], [-300, 330], [0, 330], [300, 330], [-300, 620], [0, 620], [300, 620], [-ALEX.farm.d1, ALEX.farm.b0], [-ALEX.farm.d1, 620]]) {
+      const [x, z] = at(a, b);
+      farm = Math.min(farm, biomeAt(x, z).farm);
+      mtn = Math.max(mtn, mountainWeight(x, z));
+    }
+    if (farm < 0.85 || mtn > 0.01 || outsideWorld(...at(0, 330)) < 1500) return null;
+    let near = 0;
+    for (let k = 0; k < 24; k++)
+      for (const r of [1000, 1300, 1600]) {
+        const [x, z] = at(Math.cos((k / 24) * 6.283) * r, 330 + Math.sin((k / 24) * 6.283) * r);
+        near = Math.max(near, mountainWeight(x, z) * (1 - (r - 1000) / 1500));
+      }
+    return near < 0.5 ? null : near - level * 0.01;
+  }, avoid);
+  if (!spot) return null;
+  const t = townOff('Alexander-ville', 'alexander', spot.h, spot.s, spot.side, { a0: -300, a1: 300, b0: 95, b1: 610 });
+  t.annex = { a0: -ALEX.farm.d1 - 20, a1: -280, b0: ALEX.farm.b0 - 20, b1: 610 };
+  const F = ALEX.front, [B1, B2, B3] = ALEX.avenues, E = ALEX.edge;
+  t.road = loopRoad(t, F, E);
+  t.roads = [
+    t.road,
+    street(t, [[0, F], [0, B3]]), // Main Street
+    ...ALEX.avenues.map((b) => street(t, [[-E, b], [E, b]])),
+    street(t, [[-E, F], [-E, B1], [-E, B2], [-E, B3]]),
+    street(t, [[E, F], [E, B1], [E, B2], [E, B3]]),
+  ];
+  return t;
 }
+/** Alexander-ville's plan (town coordinates): Front Street, the avenues, the side streets' `a`, the railroad. */
+export const ALEX = {
+  front: 150, avenues: [260, 370, 480], edge: 220, rail: 565,
+  /** Alexander Acres, the farm out past West Street: how far west of Main Street it reaches (d = −a), and its b. */
+  farm: { d0: 300, d1: 540, b0: 330, b1: 590 },
+};
+
+/** Where Washington DC is (its middle) and its streets, in city coordinates (a east, b south). */
+const DC_AT: Vec2 = [-3330, 2880];
+export const DC_PLAN = {
+  /** The edge streets. */
+  x0: -470, x1: 470, z0: -330, z1: 330,
+  /** The Mall, between Constitution and Independence Avenues, from 23rd Street to 1st Street. */
+  mall: { x0: -470, x1: 330, z: 70 },
+  monument: [-80, 0] as Vec2,
+  lincoln: [-418, 0] as Vec2,
+  capitol: [400, 0] as Vec2,
+  whiteHouse: [-115, -258] as Vec2,
+  basin: { x: -180, z: 200, r: 58 },
+  jefferson: [-180, 290] as Vec2,
+};
+function makeDC(): Town {
+  const t: Town = {
+    name: 'Washington DC', kind: 'dc', x: DC_AT[0], z: DC_AT[1], ux: 1, uz: 0, side: 1, level: 0, hw: -1, s: 0,
+    road: null!, roads: [], exits: [], area: { a0: -500, a1: 500, b0: -360, b1: 360 }, blend: 180,
+  };
+  const P = DC_PLAN, M = P.mall;
+  const S = (pts: [number, number][], hw = 5.5) => street(t, pts, hw, 'street');
+  const A = (pts: [number, number][]) => street(t, pts, 7, 'avenue');
+  t.roads = [
+    S([[P.x0, P.z0], [P.x1, P.z0]]), // H Street
+    S([[P.x0, P.z1], [P.x1, P.z1]]), // Maine Avenue
+    S([[P.x0, P.z0], [P.x0, P.z1]]), // 23rd Street
+    S([[P.x1, P.z0], [P.x1, P.z1]]), // 2nd Street
+    A([[M.x0, -M.z], [M.x1, -M.z]]), // Constitution Avenue
+    A([[M.x0, M.z], [M.x1, M.z]]), // Independence Avenue
+    A([[M.x1, P.z0], [M.x1, P.z1]]), // 1st Street, in front of the Capitol
+    S([[0, P.z0], [0, P.z1]]), // 15th Street
+    S([[180, P.z0], [180, P.z1]]), // 7th Street
+    S([[-230, P.z0], [-230, -M.z]]), // 17th Street
+    S([[P.x0, -200], [-230, -200]]), // E Street (west)
+    S([[0, -200], [M.x1, -200]]), // E Street (east)
+    S([[0, 200], [M.x1, 200]]), // C Street
+    A([[0, -265], [M.x1, -115]]), // Pennsylvania Avenue
+  ];
+  // Roads in: from the west along E Street, from the east to the Capitol, and from the
+  // south up 7th Street.
+  const links = [
+    ...linkRoads(townPoint(t, P.x0, -200), [1, 0]),
+    ...linkRoads(townPoint(t, P.x1, 0), [-1, 0]),
+    ...linkRoads(townPoint(t, 180, P.z1), [0, -1]),
+  ];
+  // Level: the lie of the land, as near as the roads in allow (≤ ~7% at their steepest).
+  let land = 0, n = 0;
+  for (let a = -450; a <= 450; a += 75) for (let b = -300; b <= 300; b += 75) (land += terrainBase(...townPoint(t, a, b))), n++;
+  let lo = -Infinity, hi = Infinity;
+  for (const r of links) {
+    const h0 = profileAt(HIGHWAYS[r.from], highwayCoords(HIGHWAYS[r.from], ...r.pts[0]).s), allow = roadLength(r.pts) * 0.02;
+    (lo = Math.max(lo, h0 - allow)), (hi = Math.min(hi, h0 + allow));
+  }
+  t.level = lo <= hi ? clamp(land / n, lo, hi) : (lo + hi) / 2;
+  for (const r of t.roads) r.hs = r.hs.map(() => t.level);
+  for (const r of links) fillLink(r, t.level);
+  t.road = links[0];
+  t.roads.push(...links);
+  return t;
+}
+
+const TOWN_LIST: Town[] = [];
+{
+  const m = makeMariano();
+  if (m) TOWN_LIST.push(m);
+  const a = makeAlexander(TOWN_LIST);
+  if (a) TOWN_LIST.push(a);
+  TOWN_LIST.push(makeDC());
+  for (const t of TOWN_LIST) t.exits = exitsOf(t.roads);
+}
+/** Every town. */
+export const TOWNS: readonly Town[] = TOWN_LIST;
+/** Mariano-ville. */
+export const TOWN: Town | null = TOWNS.find((t) => t.kind === 'mariano') ?? null;
+export const ALEXANDER: Town | null = TOWNS.find((t) => t.kind === 'alexander') ?? null;
+export const DC: Town = TOWNS.find((t) => t.kind === 'dc')!;
+
+/** The town whose level area a spot is in (or within `margin` of). */
+export function townAt(x: number, z: number, margin = 0): Town | null {
+  for (const t of TOWNS) if (townDistance(t, x, z) <= margin) return t;
+  return null;
+}
+
+/** Every curved road: the ramps, the town roads and the Ring. */
+export const CURVES: CurveRoad[] = [...RAMPS, ...TOWNS.flatMap((t) => t.roads), RING];
 
 // Curve segments bucketed for fast point queries.
 const RB = 128;
@@ -846,7 +1132,7 @@ function nearAnyRoad(x: number, z: number, margin: number) {
     for (const [px, pz] of h.pts) if (Math.abs(px - x) < HW + margin && Math.abs(pz - z) < HW + margin && Math.hypot(px - x, pz - z) < HW + margin) return true;
   }
   for (const c of CURVES) if (c.kind !== 'ring' && x > c.x0 - margin && x < c.x1 + margin && z > c.z0 - margin && z < c.z1 + margin) return true;
-  if (TOWN && Math.hypot(x - TOWN.x, z - TOWN.z) < margin + 600) return true;
+  if (TOWNS.some((t) => townDistance(t, x, z) < margin + 250)) return true;
   return hexDistance(x, z) > RING_APOTHEM - HW - margin;
 }
 
@@ -869,6 +1155,11 @@ function makeLakes(): OuterLake[] {
   return out;
 }
 export const OUTER_LAKES: OuterLake[] = makeLakes();
+// DC's Tidal Basin (deep enough to sink in, like the others).
+{
+  const [x, z] = townPoint(DC, DC_PLAN.basin.x, DC_PLAN.basin.z);
+  OUTER_LAKES.push({ x, z, r: DC_PLAN.basin.r, level: DC.level - 1.2, depth: 5 });
+}
 
 function makeTowers(): Tower[] {
   const out: Tower[] = [];
@@ -885,7 +1176,7 @@ function makeTowers(): Tower[] {
         if (o !== h && Math.abs(od) < HW + 50 && os > -50 && os < o.len + 50) near = true;
       });
       if (near || nearestCurve(x, z).edge < 50) continue;
-      if (TOWN && Math.hypot(x - TOWN.x, z - TOWN.z) < 800) continue;
+      if (TOWNS.some((t) => townDistance(t, x, z) < 450)) continue;
       out.push({ x, z, h: 62 + ((s * 7) % 23) });
     }
   }
@@ -955,11 +1246,10 @@ export function shapeOuter(x: number, z: number, h: number) {
     if (Math.abs(dx) > 700 || Math.abs(dz) > 700) continue;
     h = lerp(h, c.h0, 1 - smoothstep(200, 400, Math.hypot(dx, dz)));
   }
-  // The town sits on level ground.
-  const tc = townCoords(x, z);
-  if (tc && TOWN) {
-    const out = Math.hypot(Math.max(0, Math.abs(tc.a) - 280), Math.max(0, 95 - tc.b, tc.b - 370));
-    if (out < 160) h = lerp(h, TOWN.level, 1 - smoothstep(0, 160, out));
+  // Towns sit on level ground.
+  for (const t of TOWNS) {
+    const out = townDistance(t, x, z);
+    if (out < t.blend) h = lerp(h, t.level, 1 - smoothstep(0, t.blend, out));
   }
   // Lakes: a basin below the water, a dry bank round it.
   for (const l of OUTER_LAKES) {

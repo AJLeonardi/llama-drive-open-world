@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { findRoute } from '../src/world/route';
 import { ALL_ROADS, DEMO_PARK, MOUNTAIN, NYC, SPAWN, nearRoad } from '../src/world/layout';
+import { TOWNS, townPoint } from '../src/world/outer';
 
 const length = (p: readonly (readonly [number, number])[]) => p.slice(1).reduce((s, q, i) => s + Math.hypot(q[0] - p[i][0], q[1] - p[i][1]), 0);
 
@@ -60,6 +61,16 @@ describe('directions in highway country', () => {
       // Turning at the bridge would be ~240 m; the real way round, by a ramp, is longer.
       const p = findRoute(c.x - U.ux * 120, c.z - U.uz * 120, c.x + L.ux * 120, c.z + L.uz * 120);
       expect(length(p)).toBeGreaterThan(400);
+    }
+  });
+
+  it('finds the way to every town, right into its streets', () => {
+    for (const t of TOWNS) {
+      const [tx, tz] = t.kind === 'dc' ? townPoint(t, 180, 0) : townPoint(t, 0, (t.area.b0 + t.area.b1) / 2);
+      const p = findRoute(SPAWN.x, SPAWN.z, tx, tz);
+      const last = p[p.length - 2];
+      expect(Math.hypot(last[0] - tx, last[1] - tz), t.name).toBeLessThan(60);
+      expect(length(p), t.name).toBeLessThan(Math.hypot(tx - SPAWN.x, tz - SPAWN.z) * 2.6); // (round by the interchanges)
     }
   });
 });

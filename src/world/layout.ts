@@ -9,13 +9,13 @@ import type { Surface } from '../physics/surfaces';
 import { WORLD } from './bounds';
 import { terrainBase } from './hills';
 import { biomeAt } from './biomes';
-import { outerLakeAt, outerRoadAt, shapeOuter } from './outer';
+import { outerLakeAt, outerRoadAt, shapeOuter, townAt } from './outer';
 
 export { WORLD, OUTER, TERRAIN_CELL, CHUNK } from './bounds';
 
-// The four places sit around a circle: Boston (west) and NYC (east) joined by a short
+// The four places sit around a circle: Boston (west) and NYC (east) joined by a
 // highway, the dirt track to the north and the demolition park to the south, each a
-// few seconds' drive from its neighbours. Thunder Mountain stands on the north-east
+// few seconds' drive from its neighbours (NYC a bit further out east). Thunder Mountain stands on the north-east
 // outskirts. Beyond them lies highway country (outer.ts).
 
 export type RoadKind = 'highway' | 'avenue' | 'street' | 'ramp' | 'dirt';
@@ -29,11 +29,11 @@ export interface Road {
 
 /** The cities' street plans are authored in their own coordinates, then shifted into place. */
 const BOSTON_DX = 1290;
-const NYC_DX = -1290;
+const NYC_DX = -690;
 const shift = (pts: Vec2[], dx: number, dz = 0): Vec2[] => pts.map(([x, z]) => [x + dx, z + dz]);
 
 export const BOSTON: AABB2 = { x0: -1070, z0: -460, x1: -150, z1: 460 };
-export const NYC: AABB2 = { x0: 150, z0: -460, x1: 1070, z1: 460 };
+export const NYC: AABB2 = { x0: 750, z0: -460, x1: 1670, z1: 460 };
 export const DEMO_PARK: AABB2 = { x0: -160, z0: 690, x1: 180, z1: 1060 };
 export const DEMO_PARK_GATE = { x0: -40, x1: 40 };
 
@@ -83,11 +83,11 @@ export const LAKE = {
  * roof; Beacon Hill is a building with a grassy hill behind it, so you can drive up the
  * hill right onto its roof.
  */
-export const GARAGES = [{ x: -260, z: 202 }, { x: 534, z: 172 }];
+export const GARAGES = [{ x: -260, z: 202 }, { x: 1134, z: 172 }];
 export const GARAGE = { length: 72, width: 36, level: 4.2, levels: 3 };
 export const SKYRAMPS = [
   { x0: -728, z: -48, ramp: 52, roof: 36, depth: 36, h: 10 },
-  { x0: 246, z: 315, ramp: 52, roof: 36, depth: 36, h: 10 },
+  { x0: 846, z: 315, ramp: 52, roof: 36, depth: 36, h: 10 },
 ];
 export const BEACON_HILL = { x: -660, z: 478, w: 40, d: 30, h: 14, slope: 130 };
 
@@ -167,7 +167,7 @@ export const EXIT_GORES = [
 /** Dirt road from NYC's north end to the foot of the mountain road. */
 const mountainFoot = MOUNTAIN.cliff + MOUNTAIN.gap;
 export const MOUNTAIN_ROAD: Road = {
-  pts: [[710, NYC.z0 + 5], [700, -600], [MOUNTAIN.x + Math.sin(mountainFoot) * 150, MOUNTAIN.z + Math.cos(mountainFoot) * 150 + 20], [MOUNTAIN.x + Math.sin(mountainFoot) * 138, MOUNTAIN.z + Math.cos(mountainFoot) * 138]],
+  pts: [[800, NYC.z0 + 5], [770, -600], [MOUNTAIN.x + Math.sin(mountainFoot) * 150, MOUNTAIN.z + Math.cos(mountainFoot) * 150 + 20], [MOUNTAIN.x + Math.sin(mountainFoot) * 138, MOUNTAIN.z + Math.cos(mountainFoot) * 138]],
   width: 14, kind: 'dirt',
 };
 
@@ -401,6 +401,7 @@ export function surfaceAt(x: number, z: number): Surface {
   if (depth > 1.2) return 'water';
   if (depth > 0.05) return 'sand';
   if (inAABB(x, z, DEMO_PARK)) return 'dirt';
+  if (townAt(x, z)) return 'grass'; // (lawns, even in the desert)
   const b = biomeAt(x, z);
   if (b.desert > 0.5) return 'dirt'; // desert sand (firm enough to drive and drift on)
   if (b.mountain > 0.5) return 'snow';

@@ -7,7 +7,7 @@
 // cross on bridges): only through the ramps, and at the Ring.
 import type { Vec2 } from '../util/math';
 import { ALL_ROADS, MOUNTAIN, MOUNTAIN_ROAD } from './layout';
-import { HIGHWAYS, HW, RAMPS, RAMP_HW, RING, TOWN, TOWN_HW } from './outer';
+import { HIGHWAYS, HW, RAMPS, RAMP_HW, RING, TOWNS } from './outer';
 
 const STEP = 8; // node spacing along a road (m)
 const JOIN = 9; // nodes of different roads this close are connected (or within the wider road's half-width)
@@ -49,7 +49,7 @@ function build(): Graph {
     ...HIGHWAYS.map((h) => ({ pts: h.pts.filter((_, i) => i % 2 === 0 || i === h.pts.length - 1), closed: false, hw: HW, line: true, step: 50 })),
     { pts: RING.pts.filter((_, i) => i % 2 === 0), closed: true, hw: HW, step: 50 },
     ...RAMPS.map((r) => ({ pts: r.pts, closed: false, hw: RAMP_HW })),
-    ...(TOWN ? [{ pts: TOWN.road.pts, closed: false, hw: TOWN_HW }] : []),
+    ...TOWNS.flatMap((t) => t.roads.map((r) => ({ pts: r.pts, closed: false, hw: r.hw }))),
   ];
   paths.forEach((p, pi) => {
     const first = g.x.length;
