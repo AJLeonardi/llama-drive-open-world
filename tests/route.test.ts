@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findRoute } from '../src/world/route';
+import { findRoute, routeSeconds } from '../src/world/route';
 import { ALL_ROADS, DEMO_PARK, MOUNTAIN, NYC, SPAWN, nearRoad } from '../src/world/layout';
 import { TOWNS, townPoint } from '../src/world/outer';
 
@@ -72,5 +72,27 @@ describe('directions in highway country', () => {
       expect(Math.hypot(last[0] - tx, last[1] - tz), t.name).toBeLessThan(60);
       expect(length(p), t.name).toBeLessThan(Math.hypot(tx - SPAWN.x, tz - SPAWN.z) * 2.6); // (round by the interchanges)
     }
+  });
+
+  it('estimates the time to get there, counting down along the way', () => {
+    const tx = (NYC.x0 + NYC.x1) / 2, tz = 0;
+    const p = findRoute(SPAWN.x, SPAWN.z, tx, tz);
+    expect(p.pace.length).toBe(p.length - 1);
+    expect(p.turns.length).toBe(p.length - 1);
+    const top = 47;
+    const start = routeSeconds(p, SPAWN.x, SPAWN.z, top);
+    // Somewhere between flat out all the way and a slow crawl.
+    expect(start).toBeGreaterThan(length(p) / top);
+    expect(start).toBeLessThan(length(p) / (top * 0.3));
+    // Further along the way, less time left; at the end, none.
+    let last = start;
+    for (const q of p.slice(1, -1).filter((_, i) => i % 10 === 0)) {
+      const s = routeSeconds(p, q[0], q[1], top);
+      expect(s).toBeLessThanOrEqual(last + 1e-6);
+      last = s;
+    }
+    expect(routeSeconds(p, tx, tz, top)).toBeCloseTo(0);
+    // A faster car gets there sooner.
+    expect(routeSeconds(p, SPAWN.x, SPAWN.z, 72)).toBeLessThan(start);
   });
 });

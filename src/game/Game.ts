@@ -449,7 +449,7 @@ export class Game {
     this.debris.update();
     this.underwater.update(dt);
     const f = sim.forward();
-    this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z, dt);
+    this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z, dt, car.spec.topSpeed);
     this.hud.setSpeed(sim.speed);
     this.hud.setBoost(sim.boostTimer > 1.6);
   }

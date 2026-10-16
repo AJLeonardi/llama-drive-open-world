@@ -8,7 +8,7 @@ import {
 } from '../world/layout';
 import { ALEX, DC, DC_PLAN, HIGHWAYS, MAIN_ST, OUTER_LAKES, RAMPS, RING, TOWNS, pointAt, profileAt, townPoint } from '../world/outer';
 import { RING_APOTHEM, HEX, hexDistance } from '../world/bounds';
-import { findRoute } from '../world/route';
+import { findRoute, routeSeconds, type Route } from '../world/route';
 import { FieldKind, biomeAt, fieldKind, mountainWeight } from '../world/biomes';
 import { CANYON, terrainBase } from '../world/hills';
 import type { Vec2 } from '../util/math';
@@ -309,8 +309,12 @@ export class Minimap {
   isOpen = false;
   /** Where the player wants to go (picked on the big map), and the way there by road. */
   private dest: Vec2 | null = null;
-  private route: Vec2[] | null = null;
+  private route: Route | null = null;
   private routeAge = 0;
+  /** Time to get there, counting down under the mini-map (seconds shown, smoothed). */
+  private eta: HTMLElement;
+  private etaShown = -1;
+  private etaText = '';
   /** The friend's car when playing together (shown like a destination, so you can drive to it). */
   private friend: Destination | null = null;
   /** Car pose (for the big map). */
@@ -327,6 +331,9 @@ export class Minimap {
     this.mini = document.createElement('canvas');
     wrap.appendChild(this.mini);
     root.appendChild(wrap);
+    this.eta = document.createElement('div');
+    this.eta.className = 'eta';
+    root.appendChild(this.eta);
     wrap.addEventListener('click', (e) => {
       e.stopPropagation();
       this.open(true);
@@ -488,6 +495,7 @@ export class Minimap {
     this.dest = d;
     this.route = d ? findRoute(this.car.x, this.car.z, d[0], d[1]) : null;
     this.routeAge = 0;
+    this.etaShown = -1;
     this.updateHint();
   }
 
@@ -622,8 +630,27 @@ export class Minimap {
     }
   }
 
+  /**
+   * The countdown: eases towards the estimate, so it ticks down smoothly while driving and
+   * holds still when the car stops; a big change (a new pin, a new way) jumps straight there.
+   */
+  private updateEta(x: number, z: number, dt: number, topSpeed: number) {
+    let text = '';
+    if (this.dest && this.route) {
+      const est = routeSeconds(this.route, x, z, topSpeed);
+      if (this.etaShown < 0 || Math.abs(est - this.etaShown) > Math.max(15, est * 0.4)) this.etaShown = est;
+      else this.etaShown += (est - this.etaShown) * Math.min(1, dt * 1.5);
+      const secs = Math.max(1, Math.ceil(this.etaShown));
+      text = `⏱ ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+    }
+    if (text === this.etaText) return;
+    this.etaText = text;
+    this.eta.textContent = text;
+    this.eta.classList.toggle('on', !!text);
+  }
+
   /** Mini-map: centred on the car, rotated so straight ahead is up. */
-  update(x: number, z: number, fx: number, fz: number, dt = 1 / 60) {
+  update(x: number, z: number, fx: number, fz: number, dt = 1 / 60, topSpeed = 47) {
     this.car = { x, z, fx, fz };
     // Directions: re-plan after a wrong turn (or now and then), and stop on arrival.
     if (this.dest) {
@@ -636,6 +663,7 @@ export class Minimap {
         this.route = findRoute(x, z, this.dest[0], this.dest[1]);
       }
     }
+    this.updateEta(x, z, dt, topSpeed);
     if (this.isOpen || this.frame++ % 2) return;
     const cssSize = this.mini.clientWidth;
     if (!cssSize) return;

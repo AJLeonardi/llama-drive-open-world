@@ -14,12 +14,24 @@ const JOIN = 9; // nodes of different roads this close are connected (or within 
 const CELL = 16;
 /** Extra metres charged for each turn (> ~37°) on the way. */
 const TURN_COST = 120;
+/**
+ * How fast each kind of road is driven, as a share of the car's top speed (for the time
+ * to get there): flat out on highways, slower through corners and junctions in town.
+ */
+const PACE = { highway: 0.85, ramp: 0.6, avenue: 0.6, street: 0.5, town: 0.45, dirt: 0.45, mountain: 0.35, offroad: 0.3 };
+/** Seconds lost at each turn (slowing down, cornering). */
+const TURN_SECONDS = 2;
+
+/** A way by road, with how fast each stretch of it goes (`pace[i]`: from pts[i] to pts[i + 1]). */
+export type Route = Vec2[] & { pace: number[]; turns: number[] };
 
 interface Graph {
   x: number[];
   z: number[];
   /** Half-width of the road each node is on. */
   hw: number[];
+  /** Share of top speed on the road each node is on. */
+  pace: number[];
   adj: number[][];
   grid: Map<number, number[]>;
 }
@@ -40,16 +52,16 @@ function mountainPath(): Vec2[] {
 }
 
 function build(): Graph {
-  const g: Graph = { x: [], z: [], hw: [], adj: [], grid: new Map() };
+  const g: Graph = { x: [], z: [], hw: [], pace: [], adj: [], grid: new Map() };
   const owner: number[] = [];
   const isLine: boolean[] = [];
-  const paths: { pts: Vec2[]; closed: boolean; hw: number; line?: boolean; step?: number }[] = [
-    ...ALL_ROADS.map((r) => ({ pts: r.pts, closed: !!r.closed, hw: r.width / 2 })),
-    { pts: mountainPath(), closed: false, hw: 7 },
-    ...HIGHWAYS.map((h) => ({ pts: h.pts.filter((_, i) => i % 2 === 0 || i === h.pts.length - 1), closed: false, hw: HW, line: true, step: 50 })),
-    { pts: RING.pts.filter((_, i) => i % 2 === 0), closed: true, hw: HW, step: 50 },
-    ...RAMPS.map((r) => ({ pts: r.pts, closed: false, hw: RAMP_HW })),
-    ...TOWNS.flatMap((t) => t.roads.map((r) => ({ pts: r.pts, closed: false, hw: r.hw }))),
+  const paths: { pts: Vec2[]; closed: boolean; hw: number; pace: number; line?: boolean; step?: number }[] = [
+    ...ALL_ROADS.map((r) => ({ pts: r.pts, closed: !!r.closed, hw: r.width / 2, pace: PACE[r.kind] })),
+    { pts: mountainPath(), closed: false, hw: 7, pace: PACE.mountain },
+    ...HIGHWAYS.map((h) => ({ pts: h.pts.filter((_, i) => i % 2 === 0 || i === h.pts.length - 1), closed: false, hw: HW, pace: PACE.highway, line: true, step: 50 })),
+    { pts: RING.pts.filter((_, i) => i % 2 === 0), closed: true, hw: HW, pace: PACE.highway, step: 50 },
+    ...RAMPS.map((r) => ({ pts: r.pts, closed: false, hw: RAMP_HW, pace: PACE.ramp })),
+    ...TOWNS.flatMap((t) => t.roads.map((r) => ({ pts: r.pts, closed: false, hw: r.hw, pace: PACE.town }))),
   ];
   paths.forEach((p, pi) => {
     const first = g.x.length;
@@ -59,6 +71,7 @@ function build(): Graph {
       g.x.push(x);
       g.z.push(z);
       g.hw.push(p.hw);
+      g.pace.push(p.pace);
       g.adj.push([]);
       owner.push(pi);
       isLine.push(!!p.line);
@@ -121,7 +134,7 @@ function nearest(x: number, z: number) {
  * The way from (x0, z0) to (x1, z1): along the roads from the nearest road to the car to
  * the nearest road to the target, with straight legs on and off the road at each end.
  */
-export function findRoute(x0: number, z0: number, x1: number, z1: number): Vec2[] {
+export function findRoute(x0: number, z0: number, x1: number, z1: number): Route {
   const g = getGraph();
   const s = nearest(x0, z0), t = nearest(x1, z1);
   const n = g.x.length;
@@ -181,7 +194,49 @@ export function findRoute(x0: number, z0: number, x1: number, z1: number): Vec2[
     }
   }
   const path: Vec2[] = [[x1, z1]];
-  if (dist[t] < Infinity) for (let i = t; i >= 0; i = prev[i]) path.push([g.x[i], g.z[i]]);
+  const pace = [PACE.offroad];
+  const turns = [0];
+  if (dist[t] < Infinity)
+    for (let i = t; i >= 0; i = prev[i]) {
+      path.push([g.x[i], g.z[i]]);
+      // Each stretch goes at the pace of the road it ends on (so a junction counts as the new road).
+      const j = prev[i], k = turns.length > 1 ? path[path.length - 2] : null;
+      pace.push(j >= 0 ? g.pace[i] : PACE.offroad);
+      let turn = 0;
+      if (j >= 0 && k) {
+        const ax = g.x[i] - g.x[j], az = g.z[i] - g.z[j], bx = k[0] - g.x[i], bz = k[1] - g.z[i];
+        turn = (ax * bx + az * bz) / (Math.hypot(ax, az) * Math.hypot(bx, bz) || 1) < 0.8 ? 1 : 0;
+      }
+      turns.push(turn);
+    }
   path.push([x0, z0]);
-  return path.reverse();
+  const route = path.reverse() as Route;
+  // pace/turns were collected end-first, one per node; shift them onto the stretches.
+  route.pace = pace.reverse();
+  route.turns = turns.reverse();
+  return route;
+}
+
+/**
+ * Seconds to get from (x, z), somewhere along `route`, to its end, for a car with this top
+ * speed: the rest of the stretch it's on plus every stretch after it, at each road's pace,
+ * and a little for each turn still to come.
+ */
+export function routeSeconds(route: Route, x: number, z: number, topSpeed: number): number {
+  const pts = route;
+  let seg = 0, along = 0, best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [a, b] = [pts[i], pts[i + 1]];
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const l2 = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / l2));
+    const d = Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t);
+    if (d < best) (best = d), (seg = i), (along = t);
+  }
+  const v = (i: number) => Math.max(1, topSpeed * (route.pace[i] ?? PACE.street));
+  const len = (i: number) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  // turns[i]: a turn where stretch i ends.
+  let s = (len(seg) * (1 - along)) / v(seg) + (route.turns[seg] ?? 0) * TURN_SECONDS;
+  for (let i = seg + 1; i < pts.length - 1; i++) s += len(i) / v(i) + (route.turns[i] ?? 0) * TURN_SECONDS;
+  return s;
 }
