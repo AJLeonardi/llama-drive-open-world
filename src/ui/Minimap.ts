@@ -573,25 +573,45 @@ export class Minimap {
           g.fillText(hw.name, lx, ly);
         }
     }
-    for (const d of this.places()) {
+    // Icons first, then the names: each tries below its icon, then above, right and left,
+    // and is left off (until you zoom in) if it would cover another name or icon.
+    const iconPx = Math.max(22, small * 0.07), textPx = Math.max(13, small * 0.035);
+    const shown = this.places().filter((d) => {
       const dx = X(d.x), dy = Z(d.z);
-      if (dx < -60 || dx > w + 60 || dy < -60 || dy > h + 60) continue;
-      g.font = `${Math.max(22, small * 0.07)}px sans-serif`;
-      g.fillText(d.icon, dx, dy);
-      g.font = `bold ${Math.max(13, small * 0.035)}px -apple-system, Helvetica, sans-serif`;
-      g.lineWidth = 4;
-      g.strokeStyle = 'rgba(0,0,0,0.65)';
-      g.fillStyle = '#ffffff';
-      const half = g.measureText(d.label).width / 2 + 4;
-      const lx = Math.min(w - half, Math.max(half, dx));
-      g.strokeText(d.label, lx, dy + Math.max(20, small * 0.065));
-      g.fillText(d.label, lx, dy + Math.max(20, small * 0.065));
+      return dx > -60 && dx < w + 60 && dy > -60 && dy < h + 60;
+    });
+    g.font = `${iconPx}px sans-serif`;
+    for (const d of shown) g.fillText(d.icon, X(d.x), Z(d.z));
+    type Box = { x0: number; y0: number; x1: number; y1: number };
+    const used: Box[] = shown.map((d) => ({ x0: X(d.x) - iconPx * 0.45, y0: Z(d.z) - iconPx * 0.45, x1: X(d.x) + iconPx * 0.45, y1: Z(d.z) + iconPx * 0.45 }));
+    const hits = (b: Box) => used.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+    g.font = `bold ${textPx}px -apple-system, Helvetica, sans-serif`;
+    g.lineWidth = 4;
+    g.strokeStyle = 'rgba(0,0,0,0.65)';
+    g.fillStyle = '#ffffff';
+    // YOU (always shown, so it goes first) over the car.
+    {
+      const cx = X(this.car.x), cy = Z(this.car.z), yy = cy - Math.max(22, small * 0.06), tw = g.measureText('YOU').width + 6;
+      g.strokeText('YOU', cx, yy);
+      g.fillText('YOU', cx, yy);
+      used.push({ x0: cx - tw / 2, y0: yy - textPx * 0.6, x1: cx + tw / 2, y1: yy + textPx * 0.6 }, { x0: cx - 14, y0: cy - 14, x1: cx + 14, y1: cy + 14 });
+    }
+    for (const d of shown) {
+      const dx = X(d.x), dy = Z(d.z);
+      const tw = g.measureText(d.label).width + 6, th = textPx * 1.15;
+      const gap = iconPx * 0.55 + th / 2;
+      const spots: [number, number][] = [[dx, dy + gap], [dx, dy - gap], [dx + iconPx * 0.55 + tw / 2, dy], [dx - iconPx * 0.55 - tw / 2, dy]];
+      for (const [cx, cy] of spots) {
+        const lx = Math.min(w - tw / 2, Math.max(tw / 2, cx));
+        const box = { x0: lx - tw / 2, y0: cy - th / 2, x1: lx + tw / 2, y1: cy + th / 2 };
+        if (hits(box)) continue;
+        used.push(box);
+        g.strokeText(d.label, lx, cy);
+        g.fillText(d.label, lx, cy);
+        break;
+      }
     }
     const { x, z, fx, fz } = this.car;
-    g.font = `bold ${Math.max(13, small * 0.035)}px -apple-system, Helvetica, sans-serif`;
-    g.fillStyle = '#ffffff';
-    g.strokeText('YOU', X(x), Z(z) - Math.max(22, small * 0.06));
-    g.fillText('YOU', X(x), Z(z) - Math.max(22, small * 0.06));
     arrow(g, X(x), Z(z), Math.max(12, small * 0.04), Math.atan2(fx, -fz), '#1e88ff');
     if (this.dest) {
       // Pin with its point on the spot.

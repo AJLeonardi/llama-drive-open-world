@@ -349,12 +349,9 @@ export class TownKit {
     const [x, z] = this.W(a, b);
     for (const back of [false, true]) {
       const g = new THREE.PlaneGeometry(w, h);
-      // UVs 0..1 for now (mirrored on the back); finish() points them at the atlas.
-      if (back) {
-        const uv = g.attributes.uv as THREE.BufferAttribute;
-        for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i));
-        g.rotateY(Math.PI);
-      }
+      // UVs 0..1 for now; finish() points them at the atlas. (The back is the same plane
+      // turned round, so it reads the right way from behind too.)
+      if (back) g.rotateY(Math.PI);
       g.userData.signCell = cell;
       // The plane faces +z; turn it to face +b.
       g.rotateY(this.rot(phi) + (this.t.side > 0 ? 0 : Math.PI));

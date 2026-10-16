@@ -1223,6 +1223,15 @@ export function outerLakeAt(x: number, z: number): OuterLake | null {
   return null;
 }
 
+/** Is a spot on a highway-country road, or within `m` m of its edge? */
+export function nearOuterRoad(x: number, z: number, m: number) {
+  let near = false;
+  forNearHighways(x, z, (h, s, d) => {
+    if (Math.abs(d) < HW + m && s > -m && s < h.len + m) near = true;
+  });
+  return near || nearestCurve(x, z).edge < m;
+}
+
 /** Which highway-country road (if any) is under a point. */
 export function outerRoadAt(x: number, z: number): 'highway' | 'ramp' | null {
   let on = false;

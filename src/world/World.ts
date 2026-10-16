@@ -15,6 +15,7 @@ import { buildDemoPark } from './demoPark';
 import { buildMountain } from './mountain';
 import { buildCityStunts } from './cityStunts';
 import { OuterWorld } from './OuterWorld';
+import { nearOuterRoad } from './outer';
 import { groundMaterial } from './groundMaterial';
 import { roadMaterial } from './roadMaterial';
 import type { PropSpawn } from './propModels';
@@ -112,11 +113,13 @@ export class World {
     }
     for (const w of waterMeshes()) this.group.add(w);
 
-    const spawns: PropSpawn[] = [...railProps, ...boston.props, ...nyc.props, ...highway.props, ...track.props, ...park.props, ...mountain.props, ...stunts.props];
+    // (Nothing left standing on the highways out of town, where they start in the middle.)
+    const spawns: PropSpawn[] = [...railProps, ...boston.props, ...nyc.props, ...highway.props, ...track.props, ...park.props, ...mountain.props, ...stunts.props]
+      .filter((p) => !nearOuterRoad(p.x, p.z, 2));
     this.props = new Breakable(physics, spawns);
     this.group.add(this.props.group);
 
-    this.parkedSpawns = [...boston.parked, ...nyc.parked, ...park.parked, ...stunts.parked];
+    this.parkedSpawns = [...boston.parked, ...nyc.parked, ...park.parked, ...stunts.parked].filter((p) => !nearOuterRoad(p.x, p.z, 2));
     this.spawnParked();
   }
 

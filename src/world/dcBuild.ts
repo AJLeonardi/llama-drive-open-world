@@ -359,8 +359,8 @@ export function buildDC(k: TownKit) {
       const len = Math.hypot(q.a - p.a, q.b - p.b), ua = (q.a - p.a) / len, ub = (q.b - p.b) / len;
       for (let s = 12; s < len; s += 24)
         for (const side of [-1, 1]) {
-          const a = p.a + ua * s - ub * side * (r.hw + 1.4), b = p.b + ub * s + ua * side * (r.hw + 1.4);
-          if (k.clear(a, b, 0.8) && rng() < 0.6) k.tree(a, b, 'broad');
+          const a = p.a + ua * s - ub * side * (r.hw + 2), b = p.b + ub * s + ua * side * (r.hw + 2);
+          if (k.clear(a, b, 1.2) && rng() < 0.6) k.tree(a, b, 'broad');
         }
     }
   }
