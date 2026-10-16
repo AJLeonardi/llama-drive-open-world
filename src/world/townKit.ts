@@ -20,7 +20,7 @@ export interface TownItem {
   objects: THREE.Object3D[];
 }
 
-export const SIDINGS = { white: 0xf3f1ea, red: 0x9e3a2c, mustard: 0xd9a63e, blue: 0x7f93a3, sage: 0x95a585, cream: 0xe9dcb8, grey: 0xb9b8b2, yellow: 0xe8d27a } as const;
+export const SIDINGS = { white: 0xf3f1ea, red: 0x9e3a2c, mustard: 0xd9a63e, blue: 0x7f93a3, sage: 0x95a585, cream: 0xe9dcb8, grey: 0xb9b8b2, yellow: 0xe8d27a, plum: 0x9c6a86 } as const;
 export type Siding = keyof typeof SIDINGS;
 /** Siding texture repeat: one window per 4 m, one storey per 3.4 m. */
 export const SIDING_U = 4, SIDING_V = 3.4;
@@ -234,6 +234,27 @@ export class TownKit {
     const [x, z] = this.W(a, b);
     it.geos.push([`siding-${siding}`, buildingGeometry({ cx: x, cz: z, hw: sa / 2, hd: sb / 2, rot: this.rot(phi) }, y, h, 0xffffff, SIDING_U, SIDING_V, false, null)]);
     this.solid(it, a, b, y, sa, h, sb, SIDINGS[siding], phi);
+  }
+
+  /** A round tower of clapboard walls (`n` flat faces, a window on each), solid. */
+  tower(it: TownItem, a: number, b: number, y: number, r: number, h: number, n: number, siding: Siding) {
+    const [x, z] = this.W(a, b);
+    const pos: number[] = [], uv: number[] = [];
+    for (let i = 0; i < n; i++) {
+      // (Faces in the same order as CylinderGeometry's, so a `cyl` with n segments fits on top.)
+      const t0 = Math.PI / 2 - (i / n) * Math.PI * 2, t1 = Math.PI / 2 - ((i + 1) / n) * Math.PI * 2;
+      const [ax, az, bx, bz] = [x + r * Math.cos(t1), z + r * Math.sin(t1), x + r * Math.cos(t0), z + r * Math.sin(t0)];
+      const v = h / SIDING_V;
+      pos.push(ax, y, az, bx, y + h, bz, bx, y, bz, ax, y, az, ax, y + h, az, bx, y + h, bz);
+      uv.push(0, 0, 1, v, 1, 0, 0, 0, 0, v, 1, v);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(pos.map(() => 1), 3));
+    g.computeVertexNormals();
+    it.geos.push([`siding-${siding}`, g]);
+    this.solid(it, a, b, y, r * 1.7, h, r * 1.7, SIDINGS[siding]);
   }
 
   /** City walls with window rows (the world's window textures, `bright` times brighter), a cornice and a flat roof; solid. */

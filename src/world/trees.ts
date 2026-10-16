@@ -18,6 +18,8 @@ const base = import.meta.env.BASE_URL;
 const SIZE = 256;
 /** The bottom of each picture (v < BARK) is bark, for the trunks. */
 const BARK = 0.11;
+/** How dark the sun's shadows are on trees (1: as dark as anywhere else). */
+const TREE_SHADOW = 0.35;
 
 export type TreeKind = 'pine' | 'pineSnow' | 'broad' | 'autumn';
 export const TREE_KINDS: TreeKind[] = ['pine', 'pineSnow', 'broad', 'autumn'];
@@ -195,6 +197,16 @@ export function treeMaterial(kind: TreeKind) {
   let mat = materials.get(kind);
   if (mat) return mat;
   mat = new THREE.MeshLambertMaterial({ alphaTest: 0.45, alphaToCoverage: true });
+  // The leaf cards shade each other, and at full strength a whole crown goes dark as
+  // soon as it's inside the shadow box round the car: keep the sun's shadows faint on
+  // trees (enough to show which side is in the shade).
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <lights_fragment_begin>',
+      THREE.ShaderChunk.lights_fragment_begin.replace(/directionalLightShadow\.shadowIntensity/g, `directionalLightShadow.shadowIntensity * ${TREE_SHADOW.toFixed(2)}`),
+    );
+  };
+  mat.customProgramCacheKey = () => 'tree-shadow';
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, alphaTest: 0.45 });
   materials.set(kind, mat);
   depthMaterials.set(kind, depth);

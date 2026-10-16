@@ -929,7 +929,7 @@ function townOff(name: string, kind: Town['kind'], h: Highway, s: number, side: 
 /**
  * Mariano-ville: Main Street (the loop road) along the front, the town green behind it
  * with a street down each side, Church Street across the top, and Maple and Oak Streets
- * out at the ends.
+ * out at the ends; and up a drive from the end of Church Street, Mariano Mansion.
  */
 function makeMariano(): Town | null {
   const spot = findSpot(400, (h, s, side, level) => {
@@ -941,7 +941,7 @@ function makeMariano(): Town | null {
   if (!spot) return null;
   const t = townOff('Mariano-ville', 'mariano', spot.h, spot.s, spot.side, { a0: -300, a1: 300, b0: 95, b1: 400 });
   t.road = loopRoad(t, MAIN_ST, 230);
-  const church = CHURCH_ST;
+  const church = CHURCH_ST, M = MANSION;
   t.roads = [
     t.road,
     street(t, [[-123, MAIN_ST], [-123, church]]),
@@ -949,13 +949,27 @@ function makeMariano(): Town | null {
     street(t, [[-230, church], [230, church]]),
     street(t, [[-230, MAIN_ST], [-230, church]]),
     street(t, [[230, MAIN_ST], [230, church]]),
+    // Up to Mariano Mansion: the drive, and round the carriage circle in front of the house.
+    street(t, [[M.a, church], [M.a, M.circle - M.r]], M.hw),
+    street(t, Array.from({ length: 25 }, (_, i): [number, number] => {
+      const ang = -Math.PI / 2 + (i / 24) * Math.PI * 2;
+      return [M.a + Math.cos(ang) * M.r, M.circle + Math.sin(ang) * M.r];
+    }), M.hw),
   ];
+  t.annex = { a0: M.a - M.half - 6, a1: M.a + M.half + 6, b0: M.gate - 15, b1: M.back + 6 };
   return t;
 }
 /** Mariano-ville's town green (town coordinates). */
 export const MARIANO_GREEN = { a: 115, b0: MAIN_ST + TOWN_HW + 6, b1: MAIN_ST + TOWN_HW + 106 };
 /** Mariano-ville's Church Street. */
 export const CHURCH_ST = MARIANO_GREEN.b1 + 16;
+/**
+ * Mariano Mansion, in the woods behind Mariano-ville (town coordinates): a drive runs
+ * straight back at `a` from the end of Church Street, through the gate in the stone wall
+ * (at `gate`), to the carriage circle (centre `circle`, radius `r`) in front of the house
+ * (its front at `house`). The grounds reach `half` either side of the drive and back to `back`.
+ */
+export const MANSION = { a: 230, hw: 4.5, gate: 412, circle: 515, r: 20, house: 548, half: 98, back: 618 };
 
 /**
  * Alexander-ville: a farm town out on the plains, the mountains rising close behind it.
