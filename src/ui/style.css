@@ -331,7 +331,8 @@ h2 {
   border-radius: 999px;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
   padding: 3px 14px 4px;
-  font-size: max(22px, calc(var(--u) * 4.5));
+  /* Grows with the screen, but never wider than the mini-map (or it runs off the edge). */
+  font-size: min(max(22px, calc(var(--u) * 4.5)), calc(min(170px, 30vh) * 0.2));
   font-weight: 900;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

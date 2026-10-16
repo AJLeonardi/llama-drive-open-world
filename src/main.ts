@@ -18,7 +18,8 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 
 /**
  * Home-screen apps on iOS are usually paused rather than closed, so check for a newer
- * build at launch and every time the app comes back to the front.
+ * build at launch, every time the app comes back to the front, and every couple of
+ * minutes while it's open (a deploy can land mid-game).
  */
 async function newerBuildAvailable() {
   if (!import.meta.env.PROD) return false;
@@ -38,3 +39,7 @@ checkForUpdate();
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) checkForUpdate();
 });
+const CHECK_EVERY_MS = 2 * 60 * 1000;
+setInterval(() => {
+  if (!document.hidden) checkForUpdate();
+}, CHECK_EVERY_MS);
