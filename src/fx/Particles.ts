@@ -164,6 +164,37 @@ export class Particles {
       this.puffs.emit(at, v.set(rnd(1.5), up + Math.random() * 2, rnd(1.5)), c.setRGB(0.85, 0.93, 1), 0.5, 1.0, 0.8, 0.6);
   }
 
+  /** Rocket exhaust at the nozzle (`k` 0..1 thrust): hot flame shooting down and out. */
+  rocketExhaust(at: THREE.Vector3Like, k: number) {
+    for (let i = 0; i < 3; i++) {
+      const hot = Math.random();
+      this.fire.emit({ x: at.x + rnd(1.2), y: at.y, z: at.z + rnd(1.2) }, v.set(rnd(3), -14 - Math.random() * 10, rnd(3)).multiplyScalar(k),
+        c.setRGB(1, 0.5 + hot * 0.4, 0.15 + hot * 0.2), 2.2 + Math.random() * 1.5, 0.45 + Math.random() * 0.3, 2, 0.9);
+    }
+  }
+
+  /** Billowing smoke rolling out across the ground from under a launching rocket. */
+  launchCloud(at: THREE.Vector3Like, n = 4) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 6 + Math.random() * 12, g = 0.78 + Math.random() * 0.17;
+      this.smoke.emit({ x: at.x + Math.cos(a) * 3, y: at.y + 1 + Math.random() * 2, z: at.z + Math.sin(a) * 3 },
+        v.set(Math.cos(a) * sp, 0.5 + Math.random() * 2, Math.sin(a) * sp), c.setRGB(g, g, g), 4 + Math.random() * 3, 3 + Math.random() * 2.5, 2.4, 0.75);
+    }
+  }
+
+  /** A space thruster's jet: a little blue-white flame going out along `dir` (m/s). */
+  jet(at: THREE.Vector3Like, dir: THREE.Vector3Like) {
+    this.fire.emit(at, v.set(dir.x + rnd(0.6), dir.y + rnd(0.6), dir.z + rnd(0.6)), c.setRGB(0.45, 0.8, 1), 0.45, 0.22, 1.2, 0.85);
+  }
+
+  /** A burst of glitter (flying through a ring, bouncing off the net). */
+  sparkle(at: THREE.Vector3Like, n: number, color = 0xffd23a) {
+    for (let i = 0; i < n; i++) {
+      c.setHex(color).offsetHSL(rnd(0.05), 0, rnd(0.1));
+      this.sparks.emit(at, v.set(rnd(9), rnd(9), rnd(9)), c, 0.18, 0.6 + Math.random() * 0.6);
+    }
+  }
+
   update(dt: number) {
     this.smoke.update(dt);
     this.sparks.update(dt);

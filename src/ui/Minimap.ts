@@ -39,8 +39,8 @@ export const DESTINATIONS: Destination[] = [
 function countryDestinations(): Destination[] {
   const out: Destination[] = [];
   for (const t of TOWNS) {
-    const [x, z] = t.kind === 'mariano' ? townPoint(t, 0, MAIN_ST + 55) : t.kind === 'alexander' ? townPoint(t, 0, ALEX.avenues[0]) : townPoint(t, ...DC_PLAN.monument);
-    out.push({ x, z, icon: t.kind === 'mariano' ? '🍁' : t.kind === 'alexander' ? '🌾' : '🏛️', label: t.name });
+    const [x, z] = t.kind === 'mariano' ? townPoint(t, 0, MAIN_ST + 55) : t.kind === 'alexander' ? townPoint(t, 0, ALEX.avenues[0]) : t.kind === 'pad' ? [t.x, t.z] : townPoint(t, ...DC_PLAN.monument);
+    out.push({ x, z, icon: t.kind === 'mariano' ? '🍁' : t.kind === 'alexander' ? '🌾' : t.kind === 'pad' ? '🚀' : '🏛️', label: t.name });
   }
   // The top of the highest pass, and the middle of farm country.
   let pass: Destination | null = null, top = -Infinity, farm: Destination | null = null, farmBest = 0;

@@ -66,8 +66,9 @@ export class Physics {
     filterIntersectionPair: () => true,
   };
 
-  constructor() {
-    this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  /** `gravity`: how strongly things fall (m/s²; the space station's is much lower). */
+  constructor(readonly gravity = 9.81) {
+    this.world = new RAPIER.World({ x: 0, y: -gravity, z: 0 });
     this.world.timestep = FIXED_DT;
     this.events = new RAPIER.EventQueue(true);
   }

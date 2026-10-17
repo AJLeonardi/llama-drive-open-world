@@ -6,6 +6,11 @@ import { RemoteCar } from '../vehicles/RemoteCar';
 import { CAR_IDS, CarId } from '../vehicles/VehicleSpec';
 import type { Vehicle } from '../vehicles/Vehicle';
 import { MAX_HEALTH } from '../damage/Damage';
+import { ThrusterKit, thrusterKit } from '../space/thrusters';
+
+/** Where a car is: on Earth, or up at the space station. */
+export type Realm = 'earth' | 'space';
+const REALMS: Realm[] = ['earth', 'space'];
 
 /** How often our car's state goes out (ms). */
 const SEND_EVERY = 50;
@@ -20,12 +25,15 @@ export class Multiplayer {
   private buffer = new StateBuffer();
   private shown = emptyState();
   private remote: RemoteCar | null = null;
+  private kit: ThrusterKit | null = null;
+  /** Where we are: the friend's car only shows when they're in the same place. */
+  private realm: Realm = 'earth';
   private lastSent = -Infinity;
   private out = emptyState();
   /** Called once when the friend leaves or the connection drops. */
   onLeave: (() => void) | null = null;
 
-  constructor(readonly link: Link, readonly isHost: boolean, private readonly physics: Physics, private readonly scene: THREE.Scene) {
+  constructor(readonly link: Link, readonly isHost: boolean, private physics: Physics, private readonly scene: THREE.Scene) {
     link.onState = (data) => {
       const s = unpackState(data);
       if (s) this.buffer.push(s, performance.now());
@@ -41,11 +49,22 @@ export class Multiplayer {
     link.send({ t: 'hello', v: PROTOCOL, car: null });
   }
 
-  /** The friend's car's state to show now (null if they have none out). */
+  /** We've gone to Earth or to space: the friend's car moves to that physics world. */
+  setRealm(realm: Realm, physics: Physics) {
+    if (realm === this.realm) return;
+    this.realm = realm;
+    this.physics = physics;
+    this.remote?.dispose();
+    this.remote = null;
+    this.kit = null;
+  }
+
+  /** The friend's car's state to show now (null if they have none out, or are somewhere else). */
   private current(now: number): CarState | null {
     if (now - this.buffer.lastHeard > QUIET) return null;
     const s = this.buffer.sample(now, this.shown);
     if (!s || s.car < 0 || s.car >= CAR_IDS.length) return null;
+    if (REALMS[s.realm] !== this.realm) return null;
     return s;
   }
 
@@ -60,6 +79,9 @@ export class Multiplayer {
     if (this.remote?.id !== id) {
       this.remote?.dispose();
       this.remote = new RemoteCar(this.physics, this.scene, id);
+      // Up in space their car has thrusters too.
+      this.kit = this.realm === 'space' ? thrusterKit(this.remote.spec) : null;
+      if (this.kit) this.remote.model.root.add(this.kit.root);
     }
     this.remote.follow(s);
   }
@@ -67,8 +89,10 @@ export class Multiplayer {
   /** Each frame: show the friend's car and send ours (null: we have no car out). */
   update(now: number, dt: number, car: Vehicle | null) {
     const s = this.current(now);
-    if (s && this.remote?.id === CAR_IDS[s.car]) this.remote.render(s, dt);
-    else this.remote?.hide();
+    if (s && this.remote?.id === CAR_IDS[s.car]) {
+      this.remote.render(s, dt);
+      this.kit?.set(s.thrust, now / 1000);
+    } else this.remote?.hide();
 
     if (now - this.lastSent < SEND_EVERY) return;
     this.lastSent = now;
@@ -83,6 +107,8 @@ export class Multiplayer {
       o.steer = car.sim.steerAngle;
       o.speed = car.sim.speed;
       o.damage = 1 - car.health / MAX_HEALTH;
+      o.realm = REALMS.indexOf(this.realm);
+      o.thrust = car.sim.thrust;
     } else {
       o.car = -1;
     }

@@ -401,7 +401,8 @@ export function surfaceAt(x: number, z: number): Surface {
   if (depth > 1.2) return 'water';
   if (depth > 0.05) return 'sand';
   if (inAABB(x, z, DEMO_PARK)) return 'dirt';
-  if (townAt(x, z)) return 'grass'; // (lawns, even in the desert)
+  const town = townAt(x, z);
+  if (town) return town.kind === 'pad' ? 'concrete' : 'grass'; // (lawns, even in the desert; launch pads are concrete)
   const b = biomeAt(x, z);
   if (b.desert > 0.5) return 'dirt'; // desert sand (firm enough to drive and drift on)
   if (b.mountain > 0.5) return 'snow';

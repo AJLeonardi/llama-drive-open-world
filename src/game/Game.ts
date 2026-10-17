@@ -26,15 +26,30 @@ import { mountainWeight } from '../world/biomes';
 import { MAX_HEALTH } from '../damage/Damage';
 import { Together } from '../ui/Together';
 import type { Link } from '../net/Link';
-import { Multiplayer } from './Multiplayer';
+import { Multiplayer, Realm } from './Multiplayer';
+import { RocketTrip, TripEnd } from './RocketTrip';
+import { Station } from '../space/Station';
+import { BOARD, NET, SPAWN as SPACE_SPAWN, SY, overDeck } from '../space/stationLayout';
+import { createSpaceSky } from '../space/spaceSky';
+import { Rocket, makeRocket } from '../space/rocket';
+import { ThrusterKit, thrusterKit } from '../space/thrusters';
+import { PAD, PADS, Town, townPoint } from '../world/outer';
+import { MOUNT_H } from '../world/padBuild';
+import type { WorldQueries } from '../vehicles/VehicleSim';
+import type { Debris as DebrisT } from '../fx/Debris';
 
-type State = 'loading' | 'title' | 'select' | 'drive' | 'paused' | 'wrecked' | 'sinking';
+type State = 'loading' | 'title' | 'select' | 'drive' | 'paused' | 'wrecked' | 'sinking' | 'launch';
 
 const DUST_COLORS = { dust: 0xb8946a, grass: 0x8a7a50, snow: 0xf4f8ff, spray: 0xd8eeff, none: 0 } as const;
 const UNDERWATER_COLOR = 0x0d5a86;
 const SINK_SECONDS = 3.5;
 
 const tmpV = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
+/** The sky's colours high up, on the way to space. */
+const SPACE_BLACK = new THREE.Color(0x02030a);
+const SKY_TOP_COLOR = new THREE.Color(0x3d8ddb);
+const SKY_HORIZON_COLOR = new THREE.Color(SKY_HORIZON);
 
 export class Game {
   private renderer: THREE.WebGLRenderer;
@@ -49,18 +64,44 @@ export class Game {
   private buildingDamage = new BuildingDamage();
   private underwater = new Underwater();
   private sky = createSky();
+  private spaceSky = createSpaceSky(2400);
+  private hemi = new THREE.HemisphereLight(0xdcecff, 0x59633f, 0.9);
   private garage!: Garage;
   private hud: Hud;
   private controls = new Controls();
   private audio = new GameAudio();
   private cameras!: Cameras;
   private tracker!: ImpactTracker;
+  private trackerRealm: Realm = 'earth';
   private minimap!: Minimap;
   private together: Together;
   /** Playing together with a friend's device (null: playing alone). */
   private mp: Multiplayer | null = null;
   /** Where the play-together screens were opened from (to go back there). */
   private togetherFrom: 'title' | 'paused' = 'title';
+
+  // ------------------------------------------------ space
+  /** Where we are: on Earth, or up at the space station. */
+  private realm: Realm = 'earth';
+  /** The station, built the first time someone flies up (and kept). */
+  private station: Station | null = null;
+  private stationBuild: Generator<void> | null = null;
+  /** Earth's physics and debris (`physics`/`debris` point at whichever world we're in). */
+  private earthPhysics!: Physics;
+  private earthDebris!: DebrisT;
+  /** The rocket standing on each launch pad. */
+  private padRockets = new Map<Town, Rocket>();
+  /** The pad we flew up from (we come back down onto it). */
+  private homePad: Town | null = null;
+  private trip: RocketTrip | null = null;
+  /** The rocket button showing: fly to space, or back to Earth. */
+  private prompt: Realm | null = null;
+  /** The rocket button only comes back once the car has driven out of the boarding circle. */
+  private boardArmed = true;
+  /** Our car's thrusters (in space). */
+  private kit: ThrusterKit | null = null;
+  private jetAcc = 0;
+  private time = 0;
 
   private car: Vehicle | null = null;
   private carId: CarId = 'bronco';
@@ -100,7 +141,9 @@ export class Game {
     const env = createEnvironment(this.renderer);
     this.scene.environment = env;
     this.scene.fog = new THREE.Fog(SKY_HORIZON, 160, 680);
-    this.scene.add(new THREE.HemisphereLight(0xdcecff, 0x59633f, 0.9));
+    this.scene.add(this.hemi);
+    this.spaceSky.visible = false;
+    this.scene.add(this.spaceSky);
     // The sun casts shadows in a box that follows the player's car.
     const sun = this.sun;
     sun.castShadow = true;
@@ -134,6 +177,7 @@ export class Game {
       },
       peekDamage: () => this.cameras.reset('orbit'),
       together: () => this.openTogether(),
+      board: () => this.board(),
     });
     this.together = new Together({
       connected: (link, isHost) => this.onConnected(link, isHost),
@@ -156,6 +200,7 @@ export class Game {
       if (k === 'c' && this.state === 'drive') this.cameras.next();
       if (k === 'escape') this.pause(this.state === 'drive');
       if (k === 'f' && this.car) this.car.sim.flipUpright();
+      if (k === 'enter' && this.prompt && this.state === 'drive') this.board();
     };
     this.setupOrbitDrag();
     // On the car-select screen, tapping a car picks it (the cards work too).
@@ -179,13 +224,22 @@ export class Game {
     await initPhysics();
     // Let the loading text paint before the heavy world build.
     await new Promise((r) => setTimeout(r, 30));
-    this.physics = new Physics();
+    this.physics = this.earthPhysics = new Physics();
     const t0 = performance.now();
     this.world = new World(this.physics);
     this.world.props.onBlast = (at) => this.blast(at);
     if (this.debug) console.log(`[perf] world built in ${(performance.now() - t0).toFixed(0)} ms`);
     this.scene.add(this.world.group);
-    this.debris = new Debris(this.physics, this.scene);
+    this.debris = this.earthDebris = new Debris(this.physics, this.scene);
+    // The rockets standing on the launch pads, their windows towards the boarding circle.
+    for (const pad of PADS) {
+      const r = makeRocket();
+      const [x, z] = townPoint(pad, 0, 0), [bx, bz] = townPoint(pad, PAD.board.a, PAD.board.b);
+      r.root.position.set(x, pad.level + MOUNT_H, z);
+      r.root.rotation.y = Math.atan2(bx - x, bz - z);
+      this.world.group.add(r.root);
+      this.padRockets.set(pad, r);
+    }
     this.cameras = new Cameras(this.camera, this.physics);
     this.garage = new Garage();
     this.garage.scene.environment = this.scene.environment;
@@ -266,22 +320,36 @@ export class Game {
     this.audio.suspend(false);
     this.carId = id;
     this.car?.dispose();
+    this.car = null;
+    this.kit = null;
     const spot = here ? this.safeSpot : null;
+    const space = this.realm === 'space';
+    const home = space ? { ...SPACE_SPAWN, y: SY } : { ...SPAWN, y: 0 };
     if (!spot) {
       this.debris.clear();
-      this.buildingDamage.clear();
-      this.world.reset({ x: SPAWN.x, y: 0, z: SPAWN.z });
+      if (space) this.station!.reset({ x: home.x, y: home.y, z: home.z });
+      else {
+        this.buildingDamage.clear();
+        this.world.reset({ x: SPAWN.x, y: 0, z: SPAWN.z });
+      }
     }
     // Playing together, the friend who joined starts a little behind, so the cars don't land on each other.
     const back = this.mp && !this.mp.isHost ? 12 : 0;
-    const at = spot ?? { x: SPAWN.x - Math.sin(SPAWN.heading) * back, y: 0, z: SPAWN.z - Math.cos(SPAWN.heading) * back, heading: SPAWN.heading };
+    const at = spot ?? { x: home.x - Math.sin(home.heading) * back, y: home.y, z: home.z - Math.cos(home.heading) * back, heading: home.heading };
     this.safeSpot = { ...at };
     this.endUnderwater();
-    this.world.outer.ensureAround(at); // out in highway country the ground may not be built yet
+    if (!space) this.world.outer.ensureAround(at); // out in highway country the ground may not be built yet
     this.car = new Vehicle(this.physics, this.scene, id, at.x, at.y + 0.4, at.z, at.heading);
-    if (spot) this.world.props.stream(at);
-    if (this.tracker) this.tracker.setCar(this.car.sim.collider);
+    if (space) {
+      // Up here the cars have rocket pods on the back.
+      this.kit = thrusterKit(this.car.spec);
+      this.car.model.root.add(this.kit.root);
+    }
+    if (spot) this.props.stream(at);
+    if (this.tracker && this.trackerRealm === this.realm) this.tracker.setCar(this.car.sim.collider);
     else this.tracker = new ImpactTracker(this.physics, this.car.sim.collider);
+    this.trackerRealm = this.realm;
+    this.boardArmed = false;
     this.audio.setCar(this.car.spec.engine);
     this.audio.chime();
     this.cameras.reset('chase');
@@ -328,12 +396,17 @@ export class Game {
 
   private endUnderwater() {
     this.underwater.stop();
-    this.sky.visible = true;
+    this.sky.visible = this.realm === 'earth';
     this.scene.background = null;
-    const fog = this.scene.fog as THREE.Fog;
-    fog.color.setHex(SKY_HORIZON);
-    fog.near = 160;
-    fog.far = 680;
+    this.resetFog();
+  }
+
+  /** The fog for wherever we are: Earth's hazy horizon, or almost none in space. */
+  private resetFog() {
+    const fog = this.scene.fog as THREE.Fog, space = this.realm === 'space';
+    fog.color.setHex(space ? 0x02030a : SKY_HORIZON);
+    fog.near = space ? 1800 : 160;
+    fog.far = space ? 5000 : 680;
   }
 
   // ---------------------------------------------------------------- loop
@@ -342,12 +415,14 @@ export class Game {
     const dt = Math.min(0.1, Math.max(0, (now - (this.last || now)) / 1000));
     this.last = now;
     this.syncSize();
+    this.time = now / 1000;
     (this.sky.material as THREE.ShaderMaterial).uniforms.time.value = now / 1000;
+    (this.spaceSky.material as THREE.ShaderMaterial).uniforms.time.value = now / 1000;
     const focus = this.car && this.state !== 'title' ? this.car.model.root.position : this.camera.position;
     this.sun.target.position.copy(focus);
     this.sun.position.copy(focus).addScaledVector(SUN_DIR, 200);
     // Clearer air up in the mountains, so the peaks show from further off.
-    if (this.state !== 'sinking') {
+    if (this.state !== 'sinking' && this.realm === 'earth' && this.state !== 'launch') {
       this.clearAir += (mountainWeight(this.camera.position.x, this.camera.position.z) - this.clearAir) * Math.min(1, dt * 0.5);
       const fog = this.scene.fog as THREE.Fog;
       fog.near = 160 + 90 * this.clearAir;
@@ -355,7 +430,7 @@ export class Game {
     }
 
     if (this.mp) {
-      const out = this.state === 'title' || this.state === 'select' || this.state === 'loading' ? null : this.car;
+      const out = this.state === 'title' || this.state === 'select' || this.state === 'loading' || this.state === 'launch' ? null : this.car;
       this.mp.update(performance.now(), dt, out);
       const f = this.mp.friend;
       this.minimap.setFriend(f && { x: f.x, z: f.z });
@@ -372,6 +447,16 @@ export class Game {
         this.renderer.render(this.garage.scene, this.garage.camera);
         break;
       case 'paused':
+        this.renderer.render(this.scene, this.camera);
+        break;
+      case 'launch':
+        if (this.trip && !this.trip.update(dt, this.time)) this.trip = null;
+        this.sky.position.copy(this.camera.position);
+        this.spaceSky.position.copy(this.camera.position);
+        if (this.realm === 'earth') this.world.update(dt, this.camera.position, this.particles, this.debris);
+        else this.station!.update(dt, this.time, null, null, this.camera.position, this.particles);
+        this.particles.update(dt);
+        this.debris.update();
         this.renderer.render(this.scene, this.camera);
         break;
       case 'drive':
@@ -405,7 +490,7 @@ export class Game {
     let steps = 0;
     const now = performance.now();
     while (this.acc >= FIXED_DT && steps < 4) {
-      car.fixedUpdate(FIXED_DT, input, this.world.queries);
+      car.fixedUpdate(FIXED_DT, input, this.queries);
       this.mp?.fixedStep(now - Math.max(0, this.acc - FIXED_DT) * 1000);
       this.tracker.beforeStep();
       this.physics.step();
@@ -443,13 +528,17 @@ export class Game {
     if (this.state === 'sinking') this.cameras.updateUnderwater(dt, car.model.root.position);
     else this.cameras.update(dt, car);
     this.sky.position.copy(this.camera.position);
-    this.world.update(dt, this.camera.position, this.particles, this.debris, car.model.root.position);
-    this.buildingDamage.update(dt, this.particles);
+    this.spaceSky.position.copy(this.camera.position);
+    if (this.realm === 'earth') {
+      this.world.update(dt, this.camera.position, this.particles, this.debris, car.model.root.position);
+      this.buildingDamage.update(dt, this.particles);
+      this.debris.update();
+      this.underwater.update(dt);
+      const f = sim.forward();
+      this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z, dt, car.spec.topSpeed);
+    } else this.spaceUpdate(dt, car);
     this.particles.update(dt);
-    this.debris.update();
-    this.underwater.update(dt);
-    const f = sim.forward();
-    this.minimap.update(car.model.root.position.x, car.model.root.position.z, f.x, f.z, dt, car.spec.topSpeed);
+    this.checkBoarding(car);
     this.hud.setSpeed(sim.speed);
     this.hud.setBoost(sim.boostTimer > 1.6);
   }
@@ -458,7 +547,7 @@ export class Game {
     const car = this.car!;
     // Exploding barrels: any real bump sets them off (the blast does the rest).
     if (imp.other?.kind === 'prop' && PROP_DEFS[(imp.other.ref as Prop).kind].explosive) {
-      if (imp.closing > 1.5) this.world.props.explode(imp.other.ref as Prop, this.particles, this.debris);
+      if (imp.closing > 1.5) this.props.explode(imp.other.ref as Prop, this.particles, this.debris);
       return;
     }
     // Breakaway posts (light poles, hydrants…): hit fast enough and they snap off.
@@ -469,7 +558,7 @@ export class Game {
       if (def.breakaway !== undefined && prop.fixed && imp.closing >= def.breakaway) {
         const v = imp.preVel;
         const sp = Math.hypot(v.x, v.z) || 1;
-        this.world.props.breakOff(prop, imp.point, { x: v.x / sp, y: 0, z: v.z / sp }, sp, this.particles);
+        this.props.breakOff(prop, imp.point, { x: v.x / sp, y: 0, z: v.z / sp }, sp, this.particles);
         car.sim.body.setLinvel({ x: v.x * 0.85, y: v.y, z: v.z * 0.85 }, true);
         imp = { ...imp, impulse: Math.min(imp.impulse, def.mass * imp.closing * 6) };
         const r = car.applyImpact(imp, this.particles, this.debris);
@@ -489,7 +578,7 @@ export class Game {
     if (this.debug) console.log(`[crash] ${o?.kind ?? '?'} J=${imp.impulse.toFixed(0)} dv=${r.dv.toFixed(1)} dmg=${r.damage.toFixed(1)} health=${car.health.toFixed(0)}`);
     let material = o?.material;
     if (o?.kind === 'prop') {
-      const res = this.world.props.hit(o.ref as Prop, imp.impulse, car.spec.mass, imp.point, imp.normal, this.particles, this.debris);
+      const res = this.props.hit(o.ref as Prop, imp.impulse, car.spec.mass, imp.point, imp.normal, this.particles, this.debris);
       if (res.destroyed) this.audio.crash(Math.max(r.dv, 8), 'wood');
       if (res.toppled) this.audio.crash(Math.max(r.dv, 6), o.material);
     } else if (o?.kind === 'parked') {
@@ -516,7 +605,7 @@ export class Game {
     if (this.state === 'title' || !car) return;
     this.cameras.addShake(Math.min(1, 10 / Math.max(1, d)));
     const R = 12;
-    for (const p of this.world.parked) {
+    for (const p of this.realm === 'earth' ? this.world.parked : []) {
       if (!p.body) continue;
       const t = p.body.translation();
       const pd = Math.hypot(t.x - at.x, t.z - at.z);
@@ -551,20 +640,22 @@ export class Game {
     const car = this.car!;
     const p = car.model.root.position;
     if (this.state === 'drive') {
+      const space = this.realm === 'space';
       if (car.wrecked) {
         this.state = 'wrecked';
         this.stateTimer = 0;
-      } else if (isDeepWater(p.x, p.z) && p.y < (waterLevelAt(p.x, p.z) ?? -Infinity) - 0.3) {
+      } else if (!space && isDeepWater(p.x, p.z) && p.y < (waterLevelAt(p.x, p.z) ?? -Infinity) - 0.3) {
         this.startSinking();
         return false;
-      } else if (p.y < -60) {
+      } else if (p.y < (space ? NET.y - 200 : -60)) {
         this.startDrive(this.carId, true); // fell out of the world somehow
         return true;
       }
       // Remember where the car is on its wheels on dry land, for respawning here.
       const up = car.sim.up();
       this.safeTimer -= dt;
-      if (this.safeTimer <= 0 && car.sim.wheelsInContact >= 3 && up.y > 0.85 && waterLevelAt(p.x, p.z) === null) {
+      const dry = space ? overDeck(p.x, p.z) && Math.abs(p.y - SY) < 1.5 : waterLevelAt(p.x, p.z) === null;
+      if (this.safeTimer <= 0 && car.sim.wheelsInContact >= 3 && up.y > 0.85 && dry) {
         this.safeTimer = 0.5;
         const f = car.sim.forward();
         this.safeSpot = { x: p.x, y: p.y, z: p.z, heading: Math.atan2(f.x, f.z) };
@@ -577,7 +668,7 @@ export class Game {
       this.stateTimer += dt;
       // Let the car finish tumbling before showing the message.
       if (this.stateTimer > 1.4 && this.hud.current !== 'wrecked') this.hud.show('wrecked');
-      if (isDeepWater(p.x, p.z) && p.y < (waterLevelAt(p.x, p.z) ?? -Infinity) - 0.3) this.startSinking();
+      if (this.realm === 'earth' && isDeepWater(p.x, p.z) && p.y < (waterLevelAt(p.x, p.z) ?? -Infinity) - 0.3) this.startSinking();
     } else if (this.state === 'sinking') {
       this.stateTimer += dt;
       if (this.stateTimer > SINK_SECONDS) {
@@ -625,6 +716,196 @@ export class Game {
       } else if (kind === 'none' && sim.skid > 0.45 && i >= 2 && Math.random() < sim.skid * 0.5) {
         this.particles.dust(cp, 0xdddddd, 1.1);
       }
+    }
+  }
+
+  // ---------------------------------------------------------------- space
+  /** The props (barrels, crates…) of wherever we are. */
+  private get props() {
+    return this.realm === 'space' ? this.station!.props : this.world.props;
+  }
+
+  private get queries(): WorldQueries {
+    return this.realm === 'space' ? this.station!.queries : this.world.queries;
+  }
+
+  /** Each frame up at the station: rings, the net, thruster flames, the props. */
+  private spaceUpdate(dt: number, car: Vehicle) {
+    const st = this.station!;
+    const p = car.model.root.position, sim = car.sim;
+    const ev = st.update(dt, this.time, p, sim.body.linvel(), this.camera.position, this.particles);
+    if (ev.hoop >= 0) {
+      const { done, total } = st.rings;
+      this.audio.ring(done);
+      // A ring gives a burst of speed, like a boost pad.
+      sim.boostTimer = 2.5;
+      const v = sim.body.linvel(), sp = Math.hypot(v.x, v.y, v.z) || 1;
+      sim.body.setLinvel({ x: v.x + (v.x / sp) * 4, y: v.y + (v.y / sp) * 4, z: v.z + (v.z / sp) * 4 }, true);
+      this.hud.toast(done === total ? '🌟 ALL THE RINGS! Space ace! 🌟' : `⭐ ${done} of ${total} rings!`);
+    }
+    if (ev.bounce) {
+      // The net springs the car back up onto the deck, the right way up.
+      const v = ev.bounce, h = Math.atan2(v.x, v.z);
+      if (ev.from) sim.body.setTranslation(ev.from, true);
+      sim.body.setRotation({ x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) }, true);
+      sim.body.setLinvel(v, true);
+      sim.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.audio.boing();
+      this.cameras.addShake(0.3);
+      this.hud.toast('BOING! 🛸 The force field caught you!');
+    }
+    if (ev.steer) {
+      // The tractor beam: steer it in (smoothly) to land on the deck.
+      const v = sim.body.linvel(), k = Math.min(1, dt * 4);
+      sim.body.setLinvel({ x: v.x + (ev.steer.x - v.x) * k, y: v.y, z: v.z + (ev.steer.z - v.z) * k }, true);
+    }
+    // Thruster flames, their little blue jets and their hiss.
+    const k = car.wrecked ? 0 : sim.thrust;
+    this.kit?.set(k, this.time);
+    this.audio.thrust(k);
+    if (this.kit && k > 0.1) {
+      this.jetAcc += dt * 40 * k;
+      const f = sim.forward();
+      while (this.jetAcc > 1) {
+        this.jetAcc -= 1;
+        for (const n of this.kit.nozzles) this.particles.jet(n.getWorldPosition(tmpV), tmpV2.set(-f.x * 9, -f.y * 9, -f.z * 9));
+      }
+    }
+  }
+
+  /** Parked in a boarding circle by a rocket: offer the flight. */
+  private checkBoarding(car: Vehicle) {
+    if (this.state !== 'drive') return this.hud.setPrompt(null);
+    const p = car.model.root.position;
+    let inside = false, pad: Town | null = null;
+    if (this.realm === 'earth') {
+      for (const t of PADS) {
+        const [x, z] = townPoint(t, PAD.board.a, PAD.board.b);
+        if (Math.hypot(p.x - x, p.z - z) < PAD.board.r + (this.prompt ? 2 : 0) && Math.abs(p.y - t.level) < 3) (inside = true), (pad = t);
+      }
+    } else inside = Math.hypot(p.x - BOARD.x, p.z - BOARD.z) < BOARD.r + (this.prompt ? 2 : 0) && Math.abs(p.y - SY) < 3;
+    if (!inside) this.boardArmed = true;
+    const offer = inside && this.boardArmed && Math.abs(car.sim.speed) < 8 && !car.wrecked;
+    this.prompt = offer ? (this.realm === 'earth' ? 'space' : 'earth') : null;
+    if (offer && pad) this.homePad = pad;
+    this.hud.setPrompt(this.prompt === 'space' ? '🚀 Fly to space!' : this.prompt === 'earth' ? '🌍 Fly back to Earth!' : null);
+  }
+
+  /** Yes to the rocket: the car gets in, and off we go. */
+  private board() {
+    if (!this.prompt || this.state !== 'drive' || !this.car) return;
+    this.audio.unlock();
+    this.audio.click();
+    const toSpace = this.prompt === 'space';
+    this.prompt = null;
+    this.hud.setPrompt(null);
+    let from: TripEnd;
+    if (toSpace) {
+      const pad = this.homePad!;
+      const r = this.padRockets.get(pad)!;
+      from = { rocket: r, base: r.root.position.clone(), heading: r.root.rotation.y };
+      // The station is built during the flight (and kept for next time).
+      if (!this.station) {
+        this.station = new Station(this.scene);
+        this.scene.add(this.station.group);
+        this.stationBuild = this.station.build();
+      }
+    } else {
+      const r = this.station!.rocket;
+      from = { rocket: r, base: r.root.position.clone(), heading: r.root.rotation.y };
+    }
+    this.car.dispose();
+    this.car = null;
+    this.kit = null;
+    this.audio.stopEngine();
+    this.state = 'launch';
+    this.trip = new RocketTrip({
+      camera: this.camera,
+      particles: this.particles,
+      audio: this.audio,
+      hud: this.hud,
+      skyFade: (k) => this.skyFade(k),
+      buildStep: () => this.buildStep(),
+      arrive: () => this.arrive(toSpace),
+      done: () => this.startDrive(this.carId, true),
+    }, from, toSpace);
+  }
+
+  /** A few milliseconds more of building the station. */
+  private buildStep() {
+    if (!this.stationBuild) return;
+    const t0 = performance.now();
+    while (performance.now() - t0 < 6) {
+      if (this.stationBuild.next().done) {
+        this.stationBuild = null;
+        this.station!.props.onBlast = (at) => this.blast(at);
+        break;
+      }
+    }
+  }
+
+  /** Mid-flight (the screen is white): switch worlds. Returns where the rocket lands. */
+  private arrive(toSpace: boolean): TripEnd {
+    if (toSpace) {
+      if (this.stationBuild) {
+        this.station!.finishBuild(this.stationBuild);
+        this.stationBuild = null;
+        this.station!.props.onBlast = (at) => this.blast(at);
+      }
+      this.setRealm('space');
+      const r = this.station!.rocket;
+      // Arriving at the station: a car rolls out by the rocket (the spot to respawn at).
+      this.safeSpot = { x: SPACE_SPAWN.x, y: SY, z: SPACE_SPAWN.z, heading: SPACE_SPAWN.heading };
+      this.station!.reset({ x: SPACE_SPAWN.x, y: SY, z: SPACE_SPAWN.z });
+      return { rocket: r, base: r.root.position.clone(), heading: r.root.rotation.y };
+    }
+    this.setRealm('earth');
+    const pad = this.homePad ?? PADS[0];
+    const r = this.padRockets.get(pad)!;
+    const [x, z] = townPoint(pad, 0, 0);
+    // Back on the pad: the car rolls out of the boarding circle towards the road out.
+    const [bx, bz] = townPoint(pad, PAD.board.a, PAD.board.b), [ox, oz] = townPoint(pad, 0, -PAD.half);
+    const spot = { x: bx, y: pad.level, z: bz, heading: Math.atan2(ox - bx, oz - bz) };
+    this.safeSpot = spot;
+    this.world.outer.ensureAround(spot);
+    this.world.props.stream(spot);
+    return { rocket: r, base: new THREE.Vector3(x, pad.level + MOUNT_H, z), heading: r.root.rotation.y };
+  }
+
+  /** Switch the scene, physics, sky and lights between Earth and the space station. */
+  private setRealm(realm: Realm) {
+    if (realm === this.realm) return;
+    this.realm = realm;
+    const space = realm === 'space';
+    this.physics = space ? this.station!.physics : this.earthPhysics;
+    this.debris = space ? this.station!.debris : this.earthDebris;
+    this.cameras.physics = this.physics;
+    this.mp?.setRealm(realm, this.physics);
+    this.world.group.visible = !space;
+    this.buildingDamage.group.visible = !space;
+    this.station!.group.visible = space;
+    this.sky.visible = !space;
+    this.spaceSky.visible = space;
+    this.hud.setSpace(space);
+    if (this.minimap.isOpen) this.minimap.open(false);
+    this.resetFog();
+    this.camera.far = space ? 3000 : 900;
+    this.camera.updateProjectionMatrix();
+    this.hemi.color.setHex(space ? 0xb8c8ff : 0xdcecff);
+    this.hemi.groundColor.setHex(space ? 0x1c2230 : 0x59633f);
+    this.hemi.intensity = space ? 0.55 : 0.9;
+    this.skyFade(0);
+  }
+
+  /** Darken Earth's sky towards black (0: a normal day). */
+  private skyFade(k: number) {
+    const u = (this.sky.material as THREE.ShaderMaterial).uniforms;
+    (u.top.value as THREE.Color).copy(SKY_TOP_COLOR).lerp(SPACE_BLACK, k);
+    (u.horizon.value as THREE.Color).copy(SKY_HORIZON_COLOR).lerp(SPACE_BLACK, Math.min(1, k * 1.2));
+    u.cloudLight.value = 1 - Math.min(1, k * 1.5);
+    if (this.realm === 'earth') {
+      const fog = this.scene.fog as THREE.Fog;
+      fog.color.copy(SKY_HORIZON_COLOR).lerp(SPACE_BLACK, k);
     }
   }
 

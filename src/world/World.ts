@@ -43,6 +43,8 @@ function materials(): Record<string, THREE.Material> {
     plain: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.05 }),
     loop: new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.4, metalness: 0.3 }),
     glow: new THREE.MeshBasicMaterial({ vertexColors: true }),
+    // (Highway country's 'glow' is its blinking tower lights: this one is plain lit-up colour.)
+    neon: new THREE.MeshBasicMaterial({ vertexColors: true }),
     sidewalk: new THREE.MeshLambertMaterial({ map: sidewalkTexture() }),
     store: new THREE.MeshStandardMaterial({ map: storefrontTexture(), roughness: 0.5, metalness: 0.1 }),
     boost: new THREE.MeshBasicMaterial({ map: boostTexture(), polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, depthWrite: false }),

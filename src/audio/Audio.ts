@@ -48,6 +48,11 @@ export class GameAudio {
   private eng: EngineSound | null = null;
   private wind!: GainNode;
   private skid!: GainNode;
+  /** Rocket engines: a deep roar and a crackle on top. */
+  private roar!: GainNode;
+  private crackle!: GainNode;
+  /** The car's space thrusters: a soft jet hiss. */
+  private jet!: GainNode;
   private lastThrottle = 0;
   private boostLevel = 0;
   private stalled = false;
@@ -73,6 +78,9 @@ export class GameAudio {
       this.noise = this.makeNoise();
       this.wind = this.loopNoise(this.lowpass(700), 0);
       this.skid = this.loopNoise(this.bandpass(750, 2), 0);
+      this.roar = this.loopNoise(this.lowpass(160, 0.9), 0);
+      this.crackle = this.loopNoise(this.bandpass(1400, 0.6), 0);
+      this.jet = this.loopNoise(this.bandpass(2600, 0.9), 0);
     }
     if (this.ctx.state !== 'running') void this.ctx.resume();
   }
@@ -254,7 +262,7 @@ export class GameAudio {
     const n = this.engine;
     if (!n || !this.ctx) return;
     const t = this.ctx.currentTime;
-    for (const g of [n.gain, n.intakeGain, n.turboGain]) g?.gain.setTargetAtTime(0, t, 0.05);
+    for (const g of [n.gain, n.intakeGain, n.turboGain, this.wind, this.skid, this.jet]) g?.gain.setTargetAtTime(0, t, 0.05);
     setTimeout(() => {
       try {
         n.src.stop();
@@ -424,6 +432,40 @@ export class GameAudio {
     f.frequency.exponentialRampToValueAtTime(300, t + 1.1);
     // Bubbly blips
     for (let i = 0; i < 14; i++) this.tone('sine', 300 + Math.random() * 500, 900 + Math.random() * 600, 0.08, 0.08, 0.4 + i * 0.18);
+  }
+
+  /** Rocket engines, 0 (off) to 1 (full thrust at liftoff). */
+  rocket(level: number) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.roar.gain.setTargetAtTime(level * 1.6, t, 0.15);
+    this.crackle.gain.setTargetAtTime(level * 0.22, t, 0.15);
+  }
+
+  /** The car's thrusters, 0..1. */
+  thrust(level: number) {
+    if (!this.ctx) return;
+    this.jet.gain.setTargetAtTime(level * 0.16, this.ctx.currentTime, 0.08);
+  }
+
+  /** Countdown beep (higher on "go"). */
+  beep(go = false) {
+    if (!this.ctx) return;
+    this.tone('square', go ? 1320 : 880, go ? 1320 : 880, 0.12, go ? 0.5 : 0.18);
+  }
+
+  /** Flying through a ring: a sparkly rising arpeggio. */
+  ring(n: number) {
+    if (!this.ctx) return;
+    const base = 660 * Math.pow(2, (n % 6) / 12);
+    [1, 1.26, 1.5, 2].forEach((m, i) => this.tone('sine', base * m, base * m * 1.01, 0.16, 0.35, i * 0.06));
+  }
+
+  /** Landing on the force-field net: a big springy boing. */
+  boing() {
+    if (!this.ctx) return;
+    this.tone('sine', 110, 420, 0.5, 0.7);
+    this.tone('triangle', 220, 640, 0.18, 0.6, 0.03);
   }
 
   chime() {

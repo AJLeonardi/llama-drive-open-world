@@ -16,6 +16,10 @@ export interface CarState {
   speed: number;
   /** 0..1 damage, for smoke. */
   damage: number;
+  /** Where the car is: 0 on Earth, 1 up at the space station. */
+  realm: number;
+  /** 0..1 how hard its space thrusters are firing. */
+  thrust: number;
 }
 
 const BYTES = 8 + 4 * 15;
@@ -24,7 +28,8 @@ export function packState(s: CarState): ArrayBuffer {
   const buf = new ArrayBuffer(BYTES);
   const v = new DataView(buf);
   v.setFloat64(0, s.time, true);
-  const f = [s.car, s.x, s.y, s.z, s.qx, s.qy, s.qz, s.qw, s.vx, s.vy, s.vz, s.steer, s.speed, s.damage, 0];
+  // (The last slot: the realm as its whole part, the thrust as the fraction.)
+  const f = [s.car, s.x, s.y, s.z, s.qx, s.qy, s.qz, s.qw, s.vx, s.vy, s.vz, s.steer, s.speed, s.damage, s.realm + Math.min(0.99, Math.max(0, s.thrust))];
   f.forEach((n, i) => v.setFloat32(8 + i * 4, n, true));
   return buf;
 }
@@ -40,6 +45,7 @@ export function unpackState(buf: ArrayBuffer): CarState | null {
     qx: f(4), qy: f(5), qz: f(6), qw: f(7),
     vx: f(8), vy: f(9), vz: f(10),
     steer: f(11), speed: f(12), damage: f(13),
+    realm: Math.floor(f(14)), thrust: f(14) - Math.floor(f(14)),
   };
   for (const k of ['x', 'y', 'z', 'qx', 'qy', 'qz', 'qw', 'vx', 'vy', 'vz', 'steer', 'speed', 'damage'] as const)
     if (!Number.isFinite(s[k])) return null;
@@ -118,9 +124,11 @@ function lerpState(a: CarState, b: CarState, k: number, out: CarState) {
   out.steer = l(a.steer, b.steer);
   out.speed = l(a.speed, b.speed);
   out.damage = b.damage;
+  out.realm = b.realm;
+  out.thrust = b.thrust;
   return out;
 }
 
 export function emptyState(): CarState {
-  return { time: 0, car: -1, x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0, steer: 0, speed: 0, damage: 0 };
+  return { time: 0, car: -1, x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0, steer: 0, speed: 0, damage: 0, realm: 0, thrust: 0 };
 }

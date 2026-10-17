@@ -31,7 +31,14 @@ export interface WorldQueries {
   /** Where (world z) the loop's surface is centred after `progress` (0..1) of the way round. */
   loopLaneZ?(progress: number): number;
   boostAt(x: number, z: number): boolean;
+  /** Gravity here, if not Earth's (m/s²): out in space it's much lower. */
+  gravity?: number;
+  /** Space thrusters: in the air, the gas pushes and the steering turns the car. */
+  thrusters?: boolean;
 }
+
+/** Space thruster tuning: forward push (m/s²), how fast steering turns the car (rad/s), the hover lift while on the gas (m/s²). */
+export const THRUST = { push: 4, maxSpeed: 32, turn: 1.4, follow: 1.1, hover: 0.9, brake: 3 };
 
 const G = 9.81;
 /** Drift tuning, [asphalt, loose ground]: how much the rear tyres' side stiffness and grip drop. */
@@ -68,6 +75,8 @@ export class VehicleSim {
   private loopAssist = false;
   /** 0..1: how far into a drift the car is (rear tyres let go while turning on the gas). */
   drift = 0;
+  /** 0..1: how hard the space thrusters are firing (for the flames and the sound). */
+  thrust = 0;
 
   constructor(private readonly physics: Physics, readonly spec: VehicleSpec, x: number, y: number, z: number, heading: number) {
     const world = physics.world;
@@ -341,6 +350,12 @@ export class VehicleSim {
       const av = body.angvel();
       body.addTorque({ x: -up.z * k - av.x * mass * 0.6, y: -av.y * mass * 0.2, z: up.x * k - av.z * mass * 0.6 }, true);
     }
+    // Low gravity: on its wheels the car still weighs what it does on Earth (so it grips
+    // and handles the same), but once off the ground it floats.
+    const g = q.gravity ?? G;
+    if (g < G && contact >= 2) body.addForce({ x: 0, y: -mass * (G - g) * groundFrac, z: 0 }, true);
+    this.thrust = 0;
+    if (q.thrusters && contact === 0 && this.airTime > 0.15) this.thrusters(input, hc, dt);
 
     // While drifting: cap the spin rate, and keep the speed up through the slide (that's the fun part).
     if (this.drift > 0.02 && contact >= 2) {
@@ -360,6 +375,44 @@ export class VehicleSim {
     } else {
       this.skid = 0;
     }
+  }
+
+  /**
+   * Space thrusters, in the air: the gas pushes the car the way it faces (and holds it up
+   * a little, so it drifts down slower), back slows it, and steering turns it, carrying
+   * the flight path round with it.
+   */
+  private thrusters(input: DriveInput, hc: Handicap, dt: number) {
+    const { body, spec } = this;
+    const mass = spec.mass;
+    const gas = hc.engineCut ? 0 : input.throttle, back = hc.engineCut ? 0 : input.reverse;
+    const f = this.forward();
+    const fl = Math.hypot(f.x, f.z);
+    if (fl < 0.3) return; // pointing straight up or down: nothing sensible to do
+    const fx = f.x / fl, fz = f.z / fl;
+    const lv = body.linvel();
+    const along = lv.x * fx + lv.z * fz;
+    if (gas > 0 && along < THRUST.maxSpeed) body.addForce({ x: fx * mass * THRUST.push * gas, y: 0, z: fz * mass * THRUST.push * gas }, true);
+    if (gas > 0 && lv.y < 0) body.addForce({ x: 0, y: mass * THRUST.hover * gas, z: 0 }, true);
+    if (back > 0) {
+      const sp = Math.hypot(lv.x, lv.z);
+      if (sp > 1) body.addForce({ x: (-lv.x / sp) * mass * THRUST.brake * back, y: 0, z: (-lv.z / sp) * mass * THRUST.brake * back }, true);
+    }
+    // Steering: yaw towards the turn (steer +1 is right, a negative turn about +y).
+    const av = body.angvel();
+    const want = -input.steer * THRUST.turn;
+    body.addTorque({ x: 0, y: (want - av.y) * mass * 2.2, z: 0 }, true);
+    // The flight path swings round to follow the nose.
+    if (Math.abs(input.steer) > 0.05) {
+      const sp = Math.hypot(lv.x, lv.z);
+      if (sp > 2) {
+        const k = Math.min(1, THRUST.follow * dt);
+        const nx = lv.x + (fx * sp - lv.x) * k, nz = lv.z + (fz * sp - lv.z) * k;
+        const nl = Math.hypot(nx, nz) || 1;
+        body.setLinvel({ x: (nx / nl) * sp, y: lv.y, z: (nz / nl) * sp }, true);
+      }
+    }
+    this.thrust = Math.min(1, gas + back * 0.6 + Math.abs(input.steer) * 0.4);
   }
 
   /** Put the car back on its wheels (used by the flip-over button). */

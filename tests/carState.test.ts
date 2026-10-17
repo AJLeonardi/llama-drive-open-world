@@ -5,10 +5,12 @@ const at = (time: number, x: number, vx = 10): CarState => ({ ...emptyState(), t
 
 describe("friend's car state", () => {
   it('packs and unpacks', () => {
-    const s: CarState = { time: 123456789.25, car: 2, x: -4321.5, y: 87.25, z: 9876.125, qx: 0, qy: 0.6, qz: 0, qw: 0.8, vx: 30, vy: -1, vz: 2, steer: -0.3, speed: 31, damage: 0.5 };
+    const s: CarState = { time: 123456789.25, car: 2, x: -4321.5, y: 87.25, z: 9876.125, qx: 0, qy: 0.6, qz: 0, qw: 0.8, vx: 30, vy: -1, vz: 2, steer: -0.3, speed: 31, damage: 0.5, realm: 1, thrust: 0.4 };
     const u = unpackState(packState(s))!;
     expect(u.time).toBe(s.time);
     expect(u.car).toBe(2);
+    expect(u.realm).toBe(1);
+    expect(u.thrust).toBeCloseTo(0.4, 3);
     for (const k of ['x', 'y', 'z', 'qy', 'qw', 'vx', 'steer', 'speed', 'damage'] as const) expect(u[k]).toBeCloseTo(s[k], 2);
   });
 

@@ -719,7 +719,7 @@ export const RAMPS: CurveRoad[] = makeRamps();
  */
 export interface Town {
   name: string;
-  kind: 'mariano' | 'alexander' | 'dc';
+  kind: 'mariano' | 'alexander' | 'dc' | 'pad';
   x: number;
   z: number;
   ux: number;
@@ -862,10 +862,13 @@ function linkRoads(end: Vec2, inward: Vec2): CurveRoad[] {
 /** Heights for a road in: the highway's own height while alongside it, easing to the town's. */
 function fillLink(r: CurveRoad, level: number) {
   const h = HIGHWAYS[r.from], L = roadLength(r.pts);
-  let run = 0;
+  let run = 0, hh = 0;
   r.hs = r.pts.map(([x, z], i) => {
     if (i) run += Math.hypot(x - r.pts[i - 1][0], z - r.pts[i - 1][1]);
-    return lerp(profileAt(h, highwayCoords(h, x, z).s), level, smoothstep(0.1, 0.9, run / L));
+    // (Once well away from the highway, the nearest point on it can jump about: keep the last height.)
+    const c = highwayCoords(h, x, z);
+    if (i === 0 || Math.abs(c.d) < HW + 60) hh = profileAt(h, c.s);
+    return lerp(hh, level, smoothstep(0.1, 0.9, run / L));
   });
 }
 
@@ -1091,6 +1094,60 @@ function makeDC(): Town {
   return t;
 }
 
+/**
+ * The rocket launch pads, where you can fly up to the space station: a level concrete
+ * apron with the rocket standing in the middle, a road round it, and a road in from a
+ * highway that splits to join it both ways (two exits). Frame: `a` along the highway,
+ * `b` away from it; the rocket stands at (0, 0).
+ */
+export const PAD = {
+  /** Half-size of the level apron. */
+  half: 120,
+  /** The road round the rocket. */
+  circle: 46,
+  /** Drive into this circle by the rocket (centre, radius; pad coordinates) to be asked to fly. */
+  board: { a: 0, b: -30, r: 9 },
+};
+/** Alexander Mix, out on the farmland north-west of Alexander-ville; Launch Pad 39A, in the desert east of Red Canyon. */
+const PAD_SPOTS: { name: string; at: Vec2; hw: string }[] = [
+  { name: 'Alexander Mix', at: [-4000, -2700], hw: 'RT 7' },
+  { name: 'Launch Pad 39A', at: [100, 3200], hw: 'RT 5' },
+];
+
+function makePad(name: string, at: Vec2, hwName: string): Town {
+  const h = HIGHWAYS.find((o) => o.name === hwName)!;
+  const c = highwayCoords(h, at[0], at[1]);
+  const p = pointAt(h, c.s);
+  // `b` points away from the highway: left of travel when the pad is on its left.
+  const side = Math.sign(c.d) || 1;
+  const t: Town = {
+    name, kind: 'pad', x: at[0], z: at[1], ux: p.ux, uz: p.uz, side, level: 0, hw: -1, s: 0,
+    road: null!, roads: [], exits: [], area: { a0: -PAD.half, a1: PAD.half, b0: -PAD.half, b1: PAD.half }, blend: 170,
+  };
+  const inward: Vec2 = [-p.uz * side, p.ux * side];
+  const links = linkRoads(townPoint(t, 0, -PAD.half), inward);
+  let land = 0, n = 0;
+  for (let a = -100; a <= 100; a += 50) for (let b = -100; b <= 100; b += 50) (land += terrainBase(...townPoint(t, a, b))), n++;
+  let lo = -Infinity, hi = Infinity;
+  for (const r of links) {
+    const h0 = profileAt(HIGHWAYS[r.from], highwayCoords(HIGHWAYS[r.from], ...r.pts[0]).s), allow = roadLength(r.pts) * 0.025;
+    (lo = Math.max(lo, h0 - allow)), (hi = Math.min(hi, h0 + allow));
+  }
+  t.level = lo <= hi ? clamp(land / n, lo, hi) : (lo + hi) / 2;
+  const C = PAD.circle;
+  t.roads = [
+    street(t, [[0, -PAD.half], [0, -C]], 5.5),
+    street(t, Array.from({ length: 29 }, (_, i): [number, number] => {
+      const ang = -Math.PI / 2 + (i / 28) * Math.PI * 2;
+      return [Math.cos(ang) * C, Math.sin(ang) * C];
+    }), 5.5),
+  ];
+  for (const r of links) fillLink(r, t.level);
+  t.road = links[0] ?? t.roads[0];
+  t.roads.push(...links);
+  return t;
+}
+
 const TOWN_LIST: Town[] = [];
 {
   const m = makeMariano();
@@ -1098,6 +1155,7 @@ const TOWN_LIST: Town[] = [];
   const a = makeAlexander(TOWN_LIST);
   if (a) TOWN_LIST.push(a);
   TOWN_LIST.push(makeDC());
+  for (const p of PAD_SPOTS) TOWN_LIST.push(makePad(p.name, p.at, p.hw));
   for (const t of TOWN_LIST) t.exits = exitsOf(t.roads);
 }
 /** Every town. */
@@ -1106,6 +1164,8 @@ export const TOWNS: readonly Town[] = TOWN_LIST;
 export const TOWN: Town | null = TOWNS.find((t) => t.kind === 'mariano') ?? null;
 export const ALEXANDER: Town | null = TOWNS.find((t) => t.kind === 'alexander') ?? null;
 export const DC: Town = TOWNS.find((t) => t.kind === 'dc')!;
+/** The two launch pads. */
+export const PADS: readonly Town[] = TOWNS.filter((t) => t.kind === 'pad');
 
 /** The town whose level area a spot is in (or within `margin` of). */
 export function townAt(x: number, z: number, margin = 0): Town | null {

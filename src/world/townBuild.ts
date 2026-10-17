@@ -18,6 +18,7 @@ import { sidewalkTexture } from '../util/textures';
 import { SIDINGS, Siding, TownItem, TownKit, sidingTexture, welcomeTexture } from './townKit';
 import { buildAlexander } from './alexanderBuild';
 import { buildDC } from './dcBuild';
+import { buildPad } from './padBuild';
 import type { TreeKind } from './trees';
 
 export type { TownItem } from './townKit';
@@ -33,6 +34,7 @@ function build() {
     const kit = new TownKit(t);
     if (t.kind === 'mariano') buildMariano(kit);
     else if (t.kind === 'alexander') buildAlexander(kit);
+    else if (t.kind === 'pad') buildPad(kit);
     else buildDC(kit);
     kit.finish();
     items.push(...kit.items);

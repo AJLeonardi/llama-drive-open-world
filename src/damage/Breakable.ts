@@ -67,6 +67,8 @@ export class Breakable {
   private chunkGeo = new Map<PropKind, THREE.BufferGeometry>();
   /** Exploding barrels about to go off (chain reactions ripple outwards). */
   private fuses: { prop: Prop; t: number }[] = [];
+  /** Props that fall below this height are gone (off the edge of the space station). */
+  killBelow = -Infinity;
   /** Called for every explosion (the game adds the fireball, boom and the push on cars). */
   onBlast: (at: THREE.Vector3) => void = () => {};
 
@@ -95,7 +97,7 @@ export class Breakable {
       mesh.receiveShadow = true;
       const cx = (Math.floor(list[0].x / TILE) + 0.5) * TILE, cz = (Math.floor(list[0].z / TILE) + 0.5) * TILE;
       // Generous bounds so knocked-over props that roll out of their tile still draw.
-      mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, 0, cz), TILE);
+      mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, list[0].y, cz), TILE);
       meshFor.set(key, mesh);
       this.meshes.push({ mesh, cx, cz });
       this.group.add(mesh);
@@ -339,6 +341,15 @@ export class Breakable {
     for (const p of this.moving) {
       if (!p.body || p.body.isSleeping()) continue;
       const t = p.body.translation();
+      if (t.y < this.killBelow) {
+        p.removed = true;
+        this.physics.removeBody(p.body);
+        p.body = null;
+        this.moving.delete(p);
+        p.mesh.setMatrixAt(p.index, zero);
+        touched.add(p.mesh);
+        continue;
+      }
       const r = p.body.rotation();
       m4.compose(pos.set(t.x, t.y, t.z), quat.set(r.x, r.y, r.z, r.w), one);
       p.mesh.setMatrixAt(p.index, m4);

@@ -195,8 +195,12 @@ export class TownKit {
   /** Extra materials this town needs. */
   readonly materials: Record<string, THREE.Material> = {};
 
+  /** Material key of this town's sign atlas. */
+  readonly signKey: string;
+
   constructor(readonly t: Town) {
     this.Y = t.level;
+    this.signKey = `signs-${t.kind === 'pad' ? t.name.replace(/\W/g, '') : t.kind}`;
     this.rotA = Math.atan2(-t.uz, t.ux);
   }
 
@@ -377,7 +381,7 @@ export class TownKit {
       // The plane faces +z; turn it to face +b.
       g.rotateY(this.rot(phi) + (this.t.side > 0 ? 0 : Math.PI));
       g.translate(x, y + h / 2, z);
-      it.geos.push([`signs-${this.t.kind}`, g]);
+      it.geos.push([this.signKey, g]);
     }
   }
 
@@ -480,7 +484,7 @@ export class TownKit {
 
   /** Finish: point the signs at their place in the atlas, and make its material. */
   finish() {
-    const key = `signs-${this.t.kind}`;
+    const key = this.signKey;
     for (const it of this.items)
       for (const [k, g] of it.geos) {
         if (k !== key) continue;

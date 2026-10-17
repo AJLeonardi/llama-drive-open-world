@@ -25,7 +25,8 @@ export class Cameras {
   private chasePos = new THREE.Vector3();
   private initialized = false;
 
-  constructor(readonly camera: THREE.PerspectiveCamera, private readonly physics: Physics) {}
+  /** `physics`: the world the camera keeps out of the walls of (Earth or the space station). */
+  constructor(readonly camera: THREE.PerspectiveCamera, public physics: Physics) {}
 
   next() {
     this.mode = CAMERA_MODES[(CAMERA_MODES.indexOf(this.mode) + 1) % CAMERA_MODES.length];

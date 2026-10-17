@@ -10,7 +10,7 @@ const vertexShader = `varying vec3 vDir; void main() { vDir = normalize(position
 /** Gradient sky with a soft sun glow and drifting procedural clouds. */
 function skyFragment(clouds: boolean) {
   return `
-  uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir; uniform float time;
+  uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir; uniform float time; uniform float cloudLight;
   varying vec3 vDir;
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float noise(vec2 p) {
@@ -30,7 +30,7 @@ function skyFragment(clouds: boolean) {
       vec2 uv = d.xz / (d.y + 0.12) * 1.6 + vec2(time * 0.004, time * 0.002);
       float n = noise(uv) * 0.55 + noise(uv * 2.1) * 0.28 + noise(uv * 4.3) * 0.17;
       float c = smoothstep(0.5, 0.78, n) * smoothstep(0.02, 0.2, d.y);
-      col = mix(col, vec3(1.0, 1.0, 1.0) * (0.92 + 0.08 * sun), c * 0.85);
+      col = mix(col, vec3(1.0, 1.0, 1.0) * (0.92 + 0.08 * sun), c * 0.85 * cloudLight);
     }` : ''}
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
@@ -48,6 +48,8 @@ export function skyMaterial(clouds = true) {
       horizon: { value: new THREE.Color(SKY_HORIZON) },
       sunDir: { value: SUN_DIR.clone() },
       time: { value: 0 },
+      /** 1: clouds; fading to 0 on the way up to space. */
+      cloudLight: { value: 1 },
     },
     vertexShader,
     fragmentShader: skyFragment(clouds),

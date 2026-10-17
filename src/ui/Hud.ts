@@ -1,6 +1,6 @@
 import { CAR_IDS, CarId, MPH_PER_MS, SPECS } from '../vehicles/VehicleSpec';
 
-export type Screen = 'loading' | 'title' | 'select' | 'driving' | 'paused' | 'wrecked' | 'underwater' | 'together';
+export type Screen = 'loading' | 'title' | 'select' | 'driving' | 'paused' | 'wrecked' | 'underwater' | 'together' | 'cinema';
 
 export interface HudCallbacks {
   play(): void;
@@ -17,6 +17,8 @@ export interface HudCallbacks {
   peekDamage(): void;
   /** Play together (from the title or the garage menu); while connected, the menu button leaves instead. */
   together(): void;
+  /** Yes to the rocket: fly to space (or back to Earth). */
+  board(): void;
 }
 
 const html = (s: string) => {
@@ -45,6 +47,9 @@ export class Hud {
   private togetherBtn!: HTMLElement;
   private toastEl!: HTMLElement;
   private toastTimer = 0;
+  private promptBtn!: HTMLElement;
+  private bigEl!: HTMLElement;
+  private fadeEl!: HTMLElement;
   current: Screen = 'loading';
 
   constructor(cb: HudCallbacks) {
@@ -82,6 +87,15 @@ export class Hud {
     this.flipBtn = html(`<button class="flip">Flip me over! ↻</button>`);
     this.root.appendChild(this.flipBtn);
     tap(this.flipBtn, cb.flip);
+    // Parked by a rocket: "Fly to space?"
+    this.promptBtn = html(`<button class="rocket-prompt"></button>`);
+    this.root.appendChild(this.promptBtn);
+    tap(this.promptBtn, cb.board);
+    // The countdown (3, 2, 1, LIFTOFF!) and the white flash between Earth and space.
+    this.bigEl = html(`<div class="big-text"></div>`);
+    this.root.appendChild(this.bigEl);
+    this.fadeEl = html(`<div class="fade"></div>`);
+    this.root.appendChild(this.fadeEl);
     this.fpsEl = html(`<div class="fps"></div>`);
     this.root.appendChild(this.fpsEl);
 
@@ -163,6 +177,8 @@ export class Hud {
     });
 
     this.add('underwater', `<div class="screen underwater"><h2>🌊 SPLASH! 🐠 Say hi to the fish! 🐟</h2></div>`);
+    // The rocket flight: nothing on screen but the countdown.
+    this.add('cinema', `<div class="screen cinema"></div>`);
   }
 
   /** Small "new version" button (shown when an update arrives mid-game). */
@@ -215,7 +231,10 @@ export class Hud {
       el.classList.add('dim');
       el.style.pointerEvents = '';
     }
-    if (s !== 'driving') this.setFlip(false);
+    if (s !== 'driving') {
+      this.setFlip(false);
+      this.setPrompt(null);
+    }
   }
 
   private lastMph = -1;
@@ -230,6 +249,40 @@ export class Hud {
 
   private flipOn = false;
   private boostOn = false;
+  private promptText: string | null = null;
+  private bigText: string | null = null;
+
+  /** The rocket button (null hides it). */
+  setPrompt(text: string | null) {
+    if (text === this.promptText) return;
+    this.promptText = text;
+    this.promptBtn.classList.toggle('on', text !== null);
+    if (text) this.promptBtn.textContent = text;
+  }
+
+  /** Big text in the middle of the screen (the countdown; null hides it). */
+  setBig(text: string | null) {
+    if (text === this.bigText) return;
+    this.bigText = text;
+    this.bigEl.classList.toggle('on', text !== null);
+    if (text) {
+      this.bigEl.textContent = text;
+      // Restart the pop-in animation for each new number.
+      this.bigEl.classList.remove('pop');
+      void this.bigEl.offsetWidth;
+      this.bigEl.classList.add('pop');
+    }
+  }
+
+  /** Fade the screen to white (and back). */
+  setFade(on: boolean) {
+    this.fadeEl.classList.toggle('on', on);
+  }
+
+  /** Up in space there's no map of Earth to show. */
+  setSpace(on: boolean) {
+    this.root.classList.toggle('in-space', on);
+  }
 
   setFlip(on: boolean) {
     if (on === this.flipOn) return;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ALEXANDER, CROSSINGS, DC, HIGHWAYS, HW, OUTER_LAKES, RAMPS, RING, TOWERS, TOWN, TOWNS, forNearHighways, highwayCoords, nearestCurve, outerRoadAt, pointAt, profileAt, tightestRadius, townDistance, townPoint, OVERPASS_RISE } from '../src/world/outer';
+import { ALEXANDER, CROSSINGS, DC, PADS, HIGHWAYS, HW, OUTER_LAKES, RAMPS, RING, TOWERS, TOWN, TOWNS, forNearHighways, highwayCoords, nearestCurve, outerRoadAt, pointAt, profileAt, tightestRadius, townDistance, townPoint, OVERPASS_RISE } from '../src/world/outer';
 import { RING_APOTHEM, hexDistance } from '../src/world/bounds';
 import { biomeAt, mountainWeight } from '../src/world/biomes';
+import { CANYON } from '../src/world/hills';
 import { heightAt, surfaceAt } from '../src/world/layout';
 
 const BRONCO = 47; // m/s
@@ -126,8 +127,30 @@ describe('highway country', () => {
   });
 
   it('has three towns: Mariano-ville, Alexander-ville and Washington DC', () => {
-    expect(TOWNS.map((t) => t.name).sort()).toEqual(['Alexander-ville', 'Mariano-ville', 'Washington DC']);
-    for (const a of TOWNS) for (const b of TOWNS) if (a !== b) expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThan(2500);
+    const towns = TOWNS.filter((t) => t.kind !== 'pad');
+    expect(towns.map((t) => t.name).sort()).toEqual(['Alexander-ville', 'Mariano-ville', 'Washington DC']);
+    for (const a of towns) for (const b of towns) if (a !== b) expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThan(2500);
+  });
+
+  it('has two launch pads, each with a road in from a highway that joins it both ways', () => {
+    expect(PADS.map((t) => t.name).sort()).toEqual(['Alexander Mix', 'Launch Pad 39A']);
+    for (const p of PADS) {
+      expect(p.exits.length, p.name).toBe(2);
+      expect(new Set(p.exits.map((e) => e.dir)).size, p.name).toBe(2);
+      for (const t of TOWNS) if (t !== p) expect(townDistance(t, p.x, p.z), `${p.name} near ${t.name}`).toBeGreaterThan(400);
+    }
+    // Alexander Mix is north-west of Alexander-ville; 39A is in the desert east of Red Canyon, north of RT 5.
+    const mix = PADS.find((p) => p.name === 'Alexander Mix')!, a = ALEXANDER!;
+    const [ax, az] = townPoint(a, 0, 300);
+    expect(mix.x).toBeLessThan(ax);
+    expect(mix.z).toBeLessThan(az);
+    const pad = PADS.find((p) => p.name === 'Launch Pad 39A')!;
+    expect(pad.x).toBeGreaterThan(CANYON.x + 340);
+    expect(pad.z).toBeGreaterThan(CANYON.z0);
+    expect(pad.z).toBeLessThan(CANYON.z1);
+    expect(biomeAt(pad.x, pad.z).desert).toBeGreaterThan(0.8);
+    const rt5 = HIGHWAYS.find((h) => h.name === 'RT 5')!;
+    expect(Math.abs(Math.abs(highwayCoords(rt5, pad.x, pad.z).d) - Math.abs(pad.x - CANYON.x))).toBeLessThan(80);
   });
 
   it('Alexander-ville is out in farm country, close under the mountains but not in them', () => {
